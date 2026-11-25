@@ -1,6 +1,6 @@
 /**
- * Every `FunctionTool` receives a `ToolContext` per call, including the call's abort signal and its
- * interrupt signal.
+ * Every `FunctionTool` receives a `ToolContext` per call, including the call's abort signal, its
+ * interrupt signal and its steer signal.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -253,5 +253,29 @@ describe("the call's interrupt signal", () => {
 
     expect(ctx.interrupted.aborted).toBe(false);
     expect(new ToolContext({ ...fields, signal: ctx.signal, interrupted: given }).interrupted).toBe(given);
+  });
+});
+
+describe("the call's steer signal", () => {
+  test("the option is the context's steered, apart from its interrupt", async () => {
+    const steer = new AbortController();
+    const interrupt = new AbortController();
+    const tools = new ToolSet({ place: place() });
+
+    await tools.invoke("place", { symbol: "X" }, { steered: steer.signal, interrupted: interrupt.signal });
+    await tools.invokeTrusted("place", { symbol: "X" }, { steered: steer.signal });
+
+    expect(seen.map(([ctx]) => ctx.steered)).toEqual([steer.signal, steer.signal]);
+    expect(seen[0]![0].interrupted).toBe(interrupt.signal);
+  });
+
+  test("a context built without one gets a fresh signal that never aborts", () => {
+    const fields = { callId: "c", attempt: 1, toolName: "t", runId: "", node: "", context: undefined };
+    const ctx = new ToolContext({ ...fields, signal: new AbortController().signal });
+    const given = new AbortController().signal;
+
+    expect(ctx.steered.aborted).toBe(false);
+    expect(ctx.steered).not.toBe(ctx.interrupted);
+    expect(new ToolContext({ ...fields, signal: ctx.signal, steered: given }).steered).toBe(given);
   });
 });

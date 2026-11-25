@@ -146,6 +146,8 @@ export interface InvokeOptions {
   signal?: AbortSignal;
   /** The call's interrupt signal, `ToolContext.interrupted`. Absent, a signal that never aborts. */
   interrupted?: AbortSignal;
+  /** The call's steer signal, `ToolContext.steered`. Absent, a signal that never aborts. */
+  steered?: AbortSignal;
 }
 
 /** A tool by name: a top-level tool (`group: null`), or the tool `name` of group `group`. */
@@ -1266,6 +1268,7 @@ export class ToolSet {
       context: this.hostContext,
       signal: options.signal ?? this.boundSignal ?? new AbortController().signal,
       interrupted: options.interrupted,
+      steered: options.steered,
     });
   }
 

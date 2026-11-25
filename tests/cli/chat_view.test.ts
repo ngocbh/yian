@@ -1309,7 +1309,56 @@ describe("the input box while a reply runs", () => {
     },
     TIMEOUT,
   );
+
+  test(
+    "a line entered while the assistant waits on a run ends the wait early, and its next model call reads it",
+    async () => {
+      const gate = join(tmp, "gate");
+      writeFileSync(join(root, "slow.yaml"), slowFlow(gate));
+      const { io, stdin, output, rows } = terminalIo();
+      const script: ScriptedReply[] = [
+        callReply(["flows_start", { flow: "slow.yaml", inputs: {} }, "c1"]),
+        callReply(["flows_wait", { run: "r1", seconds: 60 }, "c2"]),
+        textReply("Stopped waiting."),
+      ];
+      const model = new AnsweringModel((_, count) => script[count - 1] ?? textReply("noted"));
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`start slow${ENTER}`);
+      await until(() => output.text.includes("Run slow.yaml"));
+      await pastGrace();
+      stdin.write(ENTER);
+      await until(() => rows().includes("⏺ flows_wait(r1, 60)"));
+      stdin.write(`never mind${ENTER}`);
+      await until(() => rows().includes("⏺ Stopped waiting."));
+      // The run still runs: the wait ended for the line, which the next call reads after its result.
+      const read = model.requests[2]!;
+      const results = read.messages.filter((message) => message.role === "tool");
+      const waited = JSON.parse((results[1]!.parts[0] as unknown as { content: string }).content);
+      expect(waited).toMatchObject({ run: "r1", status: "running" });
+      expect(read.messages.at(-1)!.text()).toBe("never mind");
+      writeFileSync(gate, "");
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
 });
+
+/** A flow whose one CODE node returns once the file `gate` exists, after 10 seconds at most. */
+const slowFlow = (gate: string) => `id: slow
+name: slow
+nodes:
+  nap:
+    kind: code
+    output: !str
+    code: |
+      const fs = await import("node:fs");
+      const cap = Date.now() + 10000;
+      while (!fs.existsSync(${JSON.stringify(gate)}) && Date.now() < cap) await new Promise((wake) => setTimeout(wake, 5));
+      return "rested";
+output: \${nap.output}
+`;
 
 describe("the first line of a chat", () => {
   test(

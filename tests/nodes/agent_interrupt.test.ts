@@ -1219,6 +1219,8 @@ test("a tool that watches ctx.interrupted returns early: its result is recorded,
   expect(steps()[1]).toMatchObject({ call_id: "call-1", output: "wait stopped", is_error: false });
   expect(honors()).toEqual([recordSeq()]);
   expect([seen.get("wait")!.interrupted.aborted, seen.get("wait")!.signal.aborted]).toEqual([true, false]);
+  // The interrupt isn't a steer.
+  expect(seen.get("wait")!.steered.aborted).toBe(false);
 });
 
 test("calls running together each learn of the interrupt: one result each, and the calls after them are skipped", async () => {

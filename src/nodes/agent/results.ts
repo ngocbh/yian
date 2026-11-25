@@ -1,6 +1,7 @@
 /**
  * The text the model reads for a tool result, a reported tool error, a skipped call, a call a
- * crash, a deadline or an interrupt closed, or a call the loop refused before its tool.
+ * crash, a deadline or an interrupt closed, a call a steer stopped, or a call the loop refused
+ * before its tool.
  *
  * Knows about: diagnostics, typesys, and the peer AGENT module `live`.
  */
@@ -22,6 +23,10 @@ export const ASK_TIMED_OUT_RESULT = "timed out: no answer";
 /** The result the model reads for a pending call a host interrupt closed before its answer. */
 export const TOOL_INTERRUPTED_OUTCOME =
   "The user interrupted this tool call; its outcome is unknown. Check its effect before retrying.";
+
+/** The result the model reads for a tool call that rejected with the abort of its `ToolContext.steered`. */
+export const TOOL_STEERED_OUTCOME =
+  "A new message arrived, so this call stopped early; its outcome is unknown. Check its effect before retrying.";
 
 /**
  * The result the model reads for a tool call whose arguments aren't valid JSON. Fixed text, not the

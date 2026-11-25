@@ -594,7 +594,8 @@ export interface SteerRead {
  *
  * A host's `interrupt(run, inbox)` of this inbox aborts `interrupt`. The signal is separate from
  * the node's own `caps.signal`, so an interrupt never aborts a running tool's signal; the tool
- * learns of it through its own `ToolContext.interrupted`.
+ * learns of it through its own `ToolContext.interrupted`, and of a send through `onSend`, which its
+ * `ToolContext.steered` watches.
  */
 export interface SteerInbox {
   /** The top-level inbox read. */
@@ -610,6 +611,11 @@ export interface SteerInbox {
   readonly interrupt: AbortSignal;
   /** The seq of the `interrupted` record naming this node that it hasn't honored yet, else `null`. */
   interruptedBy(): number | null;
+  /**
+   * Call `listener` after each send to this inbox lands, until the returned function is called. It
+   * runs inside the host's send, so it must not throw.
+   */
+  onSend(listener: () => void): () => void;
 }
 
 /**

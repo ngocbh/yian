@@ -198,10 +198,13 @@ function failure(promise: Promise<unknown>): Promise<Error | null> {
   return promise.then(() => null, (error: Error) => error);
 }
 
-/** A call's context from run `r1`'s node `a`, stopped by `signal` and interrupted by `interrupted`. */
-function context(signal = new AbortController().signal, attempt = 2, interrupted?: AbortSignal): ToolContext {
+/**
+ * A call's context from run `r1`'s node `a`, stopped by `signal`, interrupted by `interrupted` and
+ * told of a waiting steer by `steered`.
+ */
+function context(signal = new AbortController().signal, attempt = 2, interrupted?: AbortSignal, steered?: AbortSignal): ToolContext {
   const fields = { callId: "r1/a/1/0", attempt, toolName: "find", runId: "r1", node: "a", context: { app: 1 } };
-  return new ToolContext({ ...fields, signal, interrupted });
+  return new ToolContext({ ...fields, signal, interrupted, steered });
 }
 
 /** Check `args` for `tool` on `thread`, as the registry does, and return the checked arguments. */
@@ -390,6 +393,26 @@ test("an interrupt already set when the call is sent reaches the thread with it"
   interrupt.abort();
 
   expect(await called(thread, "wait", {}, context(undefined, 2, interrupt.signal))).toEqual({ stopped: true, signal: false });
+});
+
+/** A tool `wait` that returns whether its interrupt had aborted once its `ctx.steered` aborts. */
+const STEERABLE = calling(
+  "wait",
+  `execute: (_args, ctx) => new Promise((resolve) => {
+    const steered = () => resolve({ steered: true, interrupted: ctx.interrupted.aborted });
+    if (ctx.steered.aborted) steered();
+    else ctx.steered.addEventListener("abort", steered);
+  })`,
+);
+
+test("a waiting steer aborts the tool's own steered on the thread, not its interrupt; one already set is sent with the call", async () => {
+  const thread = started(STEERABLE);
+  const steer = new AbortController();
+
+  const waiting = called(thread, "wait", {}, context(undefined, 2, undefined, steer.signal));
+  steer.abort();
+  expect(await waiting).toEqual({ steered: true, interrupted: false });
+  expect(await called(thread, "wait", {}, context(undefined, 2, undefined, steer.signal))).toEqual({ steered: true, interrupted: false });
 });
 
 /** Source of a full garbage collection on the running thread: `Bun.gc` on Bun; on Node, V8's `gc`, exposed for the call. */

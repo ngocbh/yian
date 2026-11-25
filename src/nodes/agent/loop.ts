@@ -45,7 +45,8 @@
  * its text so far, calls not started are skipped, the reply's pending calls get `interrupted`
  * closers, and the loop writes `interrupted {by}` and returns `Interrupted`. An interrupt never
  * aborts a running tool call's signal: it aborts the call's own `ToolContext.interrupted`, and the
- * loop honors it once the call returns, its result recorded as usual. In the chat loop, a steer
+ * loop honors it once the call returns, its result recorded as usual. A steer queued while a call
+ * runs, or before it started, aborts the call's own `ToolContext.steered`. In the chat loop, a steer
  * queued when the model gives its final answer gets one more model call, within
  * `maxToolIterations`; a structured agent without tools or skills reads its steers once, before
  * its single call.
@@ -129,6 +130,7 @@ import {
   reportedText,
   SKIPPED_TOOL_RESULT,
   TOOL_INTERRUPTED_OUTCOME,
+  TOOL_STEERED_OUTCOME,
   toolLimitText,
   toolText,
   unavailableText,
@@ -648,6 +650,12 @@ interface PlannedCall {
    * it settles.
    */
   readonly interrupted: AbortController;
+  /**
+   * The call's own steer signal, which its tool reads as `ToolContext.steered`: made when the call
+   * is planned, and aborted once the agent's steer inbox holds a steer (`watchSteers`), from before
+   * the host is asked about it until it settles.
+   */
+  readonly steered: AbortController;
   /** Run the call under its group's signal. */
   readonly invoke: (signal: AbortSignal) => Promise<unknown>;
 }
@@ -1249,7 +1257,7 @@ async function checkCall(
       }
     };
     const planned = { call, index, callId: undefined, deadline: null, resumable: false, refused: false };
-    const gate = { source: null, target: null, attempt: 1, interrupted: new AbortController() };
+    const gate = { source: null, target: null, attempt: 1, interrupted: new AbortController(), steered: new AbortController() };
     return { planned: { ...planned, ...gate, invoke }, safe: true };
   }
   const grant = turn.granted.find((each) => each.visible === call.name);
@@ -1309,18 +1317,19 @@ async function checkCall(
   // its own release.
   const attempt = attemptSince === null ? 1 + (ctx.steps?.resumesSince(turn.n) ?? 0) : evaluationsSince(turn, attemptSince);
   const interrupted = new AbortController();
-  const invoke = (signal: AbortSignal) =>
-    toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal, interrupted: interrupted.signal });
+  const steered = new AbortController();
+  const signals = { interrupted: interrupted.signal, steered: steered.signal };
+  const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal, ...signals });
   // Under the hook, every call is asked about but an `ask_user` call of the run's ask handler,
   // which waits for a person already. The tool the name resolves to decides, not the name: a
   // node's own tool comes first, under any name.
   let source = toolset.gate === null ? null : toolset.sourceOf(ref);
   if (source !== null && asksUser(source)) source = null;
-  const options = { node: ctx.nodeId, callId, attempt, signal: nodeSignal(turn), interrupted: interrupted.signal };
+  const options = { node: ctx.nodeId, callId, attempt, signal: nodeSignal(turn), ...signals };
   const failed = refusal ?? GATE_FAILED_TEXT;
   const target = source === null ? null : { read: () => toolset.gateTarget(checked, options), failed };
   const gate = { source, target, attempt };
-  const planned = { call, index, callId, deadline, resumable, refused: false, ...gate, interrupted, invoke };
+  const planned = { call, index, callId, deadline, resumable, refused: false, ...gate, interrupted, steered, invoke };
   return { planned, safe: toolset.isConcurrencySafe(checked) };
 }
 
@@ -1342,7 +1351,7 @@ function asksUser(source: ToolSource): boolean {
 function refused(call: ToolCallPart, index: number, error: unknown, resumable: boolean): CallCheck {
   const invoke = () => Promise.reject(error);
   const planned = { call, index, callId: undefined, deadline: null, resumable, refused: true };
-  const gate = { source: null, target: null, attempt: 1, interrupted: new AbortController() };
+  const gate = { source: null, target: null, attempt: 1, interrupted: new AbortController(), steered: new AbortController() };
   return { planned: { ...planned, ...gate, invoke }, safe: false };
 }
 
@@ -1392,11 +1401,13 @@ async function faultCall(turn: ToolTurn, call: ToolCallPart, index: number, erro
  * before its cut: it is closed `crashed`.
  *
  * The calls share one child signal of the node's, and each call's own interrupt
- * (`PlannedCall.interrupted`) follows the agent's from before the hook is asked until the call
- * settles. Each starts in call order; the first to fail (in time; a `ReportedToolError` is the
- * call's error result, not a failure, and so is a rejection with the abort of the call's own
- * interrupt, which the model reads as `TOOL_INTERRUPTED_OUTCOME`; a result `toolText` refuses is a
- * failure) aborts the group's signal, and no further call starts. As each call finishes with a
+ * (`PlannedCall.interrupted`) follows the agent's, and its steer signal (`PlannedCall.steered`)
+ * watches the agent's steer inbox, from before the hook is asked until the call settles. Each
+ * starts in call order; the first to fail (in time; a `ReportedToolError` is the call's error
+ * result, not a failure, and so is a rejection with the abort of the call's own interrupt, which
+ * the model reads as `TOOL_INTERRUPTED_OUTCOME`, or of its steer signal, read as
+ * `TOOL_STEERED_OUTCOME`; a result `toolText` refuses is a failure) aborts the group's signal, and
+ * no further call starts. As each call finishes with a
  * result, its text is computed and written as a `tool_result` step at once, in finish order,
  * unless the node has stopped by then; a call whose handler returned `pending()` is written as a
  * `pending` step instead and gets no tool message (the loop returns `Pending`). An agent outside a
@@ -1439,7 +1450,7 @@ async function runGroup(
   // asked to let it run again once the agent holds one.
   let end = interruptible || asking.length > 0 ? caught(turn, group, interruptible) : null;
   if (end !== null) return end;
-  const unlinks = new Map(group.map((planned) => [planned, link(turn.interrupt, planned.interrupted)]));
+  const unlinks = new Map(group.map((planned) => [planned, linkCall(turn, planned)]));
   let refusals: ReadonlyMap<PlannedCall, string> = NO_RULINGS;
   let notes: ReadonlyMap<PlannedCall, string> = NO_RULINGS;
   let holds: ReadonlySet<AskedCall> = NO_HOLDS;
@@ -1560,7 +1571,7 @@ async function runGroup(
           try {
             return await planned.invoke(controller.signal);
           } finally {
-            // A call that returned never learns of a later interrupt.
+            // A call that returned never learns of a later interrupt or steer.
             unlinks.get(planned)!();
           }
         },
@@ -1572,10 +1583,13 @@ async function runGroup(
         (error): ToolOutcome => {
           // A call whose started event threw never ran: what was thrown is the host's failure.
           if (started && isReportedToolError(error)) return settle(planned, startedAt, error, true);
-          // A tool that passed its interrupt on (to a timer, `fetch`, `spawn`) rejects with its
-          // abort: the user's act, which the model reads, not the tool's failure.
-          if (started && interruptAbort(planned.interrupted.signal, error)) {
+          // A tool that passed its interrupt or its steer signal on (to a timer, `fetch`, `spawn`)
+          // rejects with its abort: the user's act, which the model reads, not the tool's failure.
+          if (started && abortOf(planned.interrupted.signal, error)) {
             return settle(planned, startedAt, new ReportedToolError(TOOL_INTERRUPTED_OUTCOME), true);
+          }
+          if (started && abortOf(planned.steered.signal, error)) {
+            return settle(planned, startedAt, new ReportedToolError(TOOL_STEERED_OUTCOME), true);
           }
           fail(error);
           return { error };
@@ -1894,14 +1908,44 @@ function link(from: AbortSignal | undefined, to: AbortController): () => void {
 }
 
 /**
- * Whether a call's rejection `error` is the abort of its aborted `interrupted`: the signal's
- * reason, or an `AbortError`, which an API given the signal rejects with and which a module tool's
- * thread sends back by name.
+ * Link `planned`'s own interrupt to the agent's (`link`) and its steer signal to the agent's steer
+ * inbox (`watchSteers`); return a function that undoes both.
  */
-function interruptAbort(interrupted: AbortSignal, error: unknown): boolean {
-  if (!interrupted.aborted) return false;
+function linkCall(turn: ToolTurn, planned: PlannedCall): () => void {
+  const unlinks = [link(turn.interrupt, planned.interrupted), watchSteers(turn.ctx.steerInbox, planned.steered)];
+  return () => {
+    for (const unlink of unlinks) unlink();
+  };
+}
+
+/**
+ * Abort `to` once `inbox` holds a steer, a message besides an action (`queuedBesidesActions`), which
+ * the agent's next model call reads: at once when one is queued, else after the send that queues
+ * one. Return a function that stops watching. Without `inbox` it does nothing.
+ */
+function watchSteers(inbox: SteerInbox | undefined, to: AbortController): () => void {
+  if (inbox === undefined) return () => {};
+  if (inbox.queuedBesidesActions()) {
+    to.abort();
+    return () => {};
+  }
+  const stop = inbox.onSend(() => {
+    if (!inbox.queuedBesidesActions()) return;
+    stop();
+    to.abort();
+  });
+  return stop;
+}
+
+/**
+ * Whether a call's rejection `error` is the abort of its aborted `signal` (its interrupt or its
+ * steer signal): the signal's reason, or an `AbortError`, which an API given the signal rejects
+ * with and which a module tool's thread sends back by name.
+ */
+function abortOf(signal: AbortSignal, error: unknown): boolean {
+  if (!signal.aborted) return false;
   try {
-    return error === interrupted.reason || (error instanceof Error && error.name === "AbortError");
+    return error === signal.reason || (error instanceof Error && error.name === "AbortError");
   } catch {
     // A thrown Proxy whose traps throw is no abort.
     return false;

@@ -17,9 +17,9 @@
  * A check runs a tool's validator, if any, then its `isConcurrencySafe` on what `execute` will get,
  * and keeps the validator's output here, by the check's id, until the host releases it: an output
  * may be any value, which the copy would flatten. A call runs its tool's `execute` on that output,
- * else on the call's own copy of the arguments, with a context of the call's fields, whose `signal`
- * and `interrupted` the host aborts by message, and calls interleave. A call checked on an earlier
- * thread of the module, which exited, is checked again here, and its output kept as its check's. The output
+ * else on the call's own copy of the arguments, with a context of the call's fields, whose `signal`,
+ * `interrupted` and `steered` the host aborts by message, and calls interleave. A call checked on an
+ * earlier thread of the module, which exited, is checked again here, and its output kept as its check's. The output
  * validator runs on a result the host checked. Each validator's return is read as the registry reads it; values the host takes are
  * taken in by host intake here (so a class instance is refused before the copy flattens it), and a
  * throw crosses with its tool error kinds, which the host rebuilds. A result that is a pending
@@ -88,7 +88,8 @@ export interface ToolModuleCall {
 /**
  * A message the host posts: a request for the module's listing, a check of a tool's arguments or
  * its result, or a call of one of its tools, each with its id and the caller's `current()`; the
- * stop or the interrupt of the open call `id`; or the release of the output check `id` kept.
+ * stop, the interrupt or the steer of the open call `id`; or the release of the output check `id`
+ * kept.
  */
 export type ToolModuleRequest =
   | { readonly kind: "list"; readonly id: number; readonly defaults: Defaults }
@@ -97,6 +98,7 @@ export type ToolModuleRequest =
   | ({ readonly kind: "call"; readonly id: number; readonly defaults: Defaults } & ToolModuleCall)
   | { readonly kind: "abort"; readonly id: number }
   | { readonly kind: "interrupt"; readonly id: number }
+  | { readonly kind: "steer"; readonly id: number }
   | { readonly kind: "release"; readonly id: number };
 
 /**
@@ -436,11 +438,12 @@ async function callReply(
   call: ToolModuleCall & { readonly defaults: Defaults },
   signal: AbortSignal,
   interrupted: AbortSignal,
+  steered: AbortSignal,
 ): Promise<ReplyBody> {
   const { callId, attempt, runId, node } = call;
   // The host's app object can't cross a thread.
   const fields = { callId, attempt, toolName: call.tool, runId, node, context: undefined };
-  const ctx = new ToolContext({ ...fields, signal, interrupted });
+  const ctx = new ToolContext({ ...fields, signal, interrupted, steered });
   let result: unknown;
   try {
     result = await tool.execute(args as Record<string, unknown>, ctx);
@@ -506,8 +509,8 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
   let first: number | null = null;
   /** The tools of the first listing, by export name, which calls run. */
   let tools: ReadonlyMap<string, FunctionTool> | null = null;
-  /** Each open call's stop and interrupt, which the host aborts by message, by request id. */
-  const calls = new Map<number, { readonly stop: AbortController; readonly interrupted: AbortController }>();
+  /** Each open call's stop, interrupt and steer, which the host aborts by message, by request id. */
+  const calls = new Map<number, Readonly<Record<"stop" | "interrupted" | "steered", AbortController>>>();
   /** Each validator's output a check kept for its calls, by the check's request id, until the host releases it. */
   const kept = new Map<number, unknown>();
   // Building or posting a reply can throw (a getter on a thrown error, a value the clone
@@ -529,14 +532,21 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
       calls.get(request.id)?.interrupted.abort();
       return;
     }
+    if (request.kind === "steer") {
+      calls.get(request.id)?.steered.abort();
+      return;
+    }
     if (request.kind === "release") {
       kept.delete(request.id);
       return;
     }
     const { id, defaults } = request;
     first ??= id;
-    // Made now, so a stop or an interrupt that arrives before the import ends still reaches the call.
-    const open = request.kind === "call" ? { stop: new AbortController(), interrupted: new AbortController() } : null;
+    // Made now, so a stop, an interrupt or a steer that arrives before the import ends still reaches the call.
+    const open =
+      request.kind === "call"
+        ? { stop: new AbortController(), interrupted: new AbortController(), steered: new AbortController() }
+        : null;
     if (open !== null) calls.set(id, open);
     install(defaults);
     // Started outside every request's store, so no request takes what the import prints.
@@ -573,7 +583,8 @@ export function serveToolModule(port: MessagePort, data: ToolModuleData): void {
               if (read.as !== "value") return read;
               args = read.value;
             }
-            return await callReply(head, tool, args, request, open!.stop.signal, open!.interrupted.signal);
+            const { stop, interrupted, steered } = open!;
+            return await callReply(head, tool, args, request, stop.signal, interrupted.signal, steered.signal);
           },
           (error: unknown): ReplyBody => ({
             as: "failed",

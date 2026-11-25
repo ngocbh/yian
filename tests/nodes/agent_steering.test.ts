@@ -3,24 +3,29 @@
  * top-level `Inbox(str)`), which the agent reads at the top of each iteration as a recorded `steer`
  * step. Flows are hand-built (`START(notes) -> chat [-> after] -> END`) and run by `FlowEngine`
  * with a `ScriptedModel` from `models`; a tool sends a steer through the live engine's `deliver`.
- * Interrupts are in `agent_interrupt.test.ts`.
+ * A running tool call learns that a steer waits through its own `ctx.steered`. Interrupts are in
+ * `agent_interrupt.test.ts`.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleepMs } from "node:timers/promises";
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { type CompiledFlow, copyGraph, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { RunStarted, RunSucceeded, StreamChunk, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
+import { ModelCallStarted, RunStarted, RunSucceeded, StreamChunk, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { type ChatModel } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
+import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
+import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
+import { TOOL_STEERED_OUTCOME } from "../../src/nodes/agent/results.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import { Output, type SteerInbox } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
@@ -31,6 +36,8 @@ import { type LiveFrame, LiveChannel, LiveView } from "../../src/runtime/live.ts
 import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareSend, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { unreadEvents } from "../../src/runtime/waits.ts";
+import type { ToolContext } from "../../src/tools/context.ts";
+import { ReportedToolError } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type Scheduler, withWarnings } from "../../src/platform.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
@@ -129,7 +136,7 @@ function steer(event: string): void {
 }
 
 /** A steer inbox opener that never has anything queued, for a node driven without an engine. */
-const NO_STEERS = (inbox: string): SteerInbox => ({ inbox, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null });
+const NO_STEERS = (inbox: string): SteerInbox => ({ inbox, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null, onSend: () => () => {} });
 
 /**
  * One loaded `chat` agent granted `tools`, output `${chat.output}`; with
@@ -398,3 +405,245 @@ test("resume reuses a finished node with a steer inbox without reading it again"
   // The steer sent while down stays unread: the finished agent never reads again.
   expect([...resumed.unread.keys()]).toEqual(["notes"]);
 });
+
+// --- a running tool call learns that a steer waits --------------------------- //
+
+/** Resolve once `signal` aborts: at once when it already has. */
+function aborted(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+/**
+ * A `wait` tool, safe to run beside others when `safe`, that keeps each call's context in `seen`
+ * and returns what `body` does with it and the call's `id` argument.
+ */
+function waitTool(seen: ToolContext[], body: (ctx: ToolContext, id: string) => unknown, safe = false): FunctionTool {
+  return new FunctionTool({
+    name: "wait",
+    description: "Wait for the job.",
+    parametersJsonSchema: { type: "object", properties: { id: { type: "string" } } },
+    isConcurrencySafe: safe ? () => true : null,
+    execute: (args, ctx) => (seen.push(ctx), body(ctx, String(args["id"]))),
+  });
+}
+
+/** `waitTool` as a run's tools. */
+const waitTools = (seen: ToolContext[], body: (ctx: ToolContext, id: string) => unknown, safe = false) =>
+  new ToolSet({ wait: waitTool(seen, body, safe) });
+
+/** A model that calls `wait`, then answers `done`. */
+const waitThenDone = () => new ScriptedModel([reply("", ["wait", {}, "call-1"]), reply("done")], CONFIG);
+
+/** The last run's `chat` steps, each as its kind, a tool result as its output. */
+function trail(): unknown[] {
+  return running!.log.records().flatMap(({ record }) => {
+    if (!(record instanceof NodeStepRecord) || record.nodeId !== "chat") return [];
+    return [record.step["kind"] === "tool_result" ? record.step["output"] : record.step["kind"]];
+  });
+}
+
+test("a steer queued during the model call has ctx.steered fired at the tool's start; the next call reads it after the result", async () => {
+  const seen: ToolContext[] = [];
+  const atStart: boolean[] = [];
+  const tools = waitTools(seen, async (ctx) => (atStart.push(ctx.steered.aborted), await aborted(ctx.steered), "partial"));
+  const onEvent = (event: unknown) => void (event instanceof ModelCallStarted && event.n === 1 && steer("hurry"));
+  const model = waitThenDone();
+
+  expect(await run(chatFlow({ tools: ["wait"] }), model, { tools, onEvent })).toBe("done");
+  expect(atStart).toEqual([true]);
+  expect(trail()).toEqual(["model_call", "partial", "steer", "model_call"]);
+  expect(model.requests[1]!.messages.at(-1)!.text()).toBe("hurry");
+});
+
+test("a steer sent while the tool waits fires its ctx.steered, not its ctx.interrupted; a withdraw after leaves it fired", async () => {
+  const seen: ToolContext[] = [];
+  const began = Promise.withResolvers<void>();
+  const tools = waitTools(seen, async (ctx) => (began.resolve(), await aborted(ctx.steered), "partial"));
+  const done = run(chatFlow({ tools: ["wait"] }), waitThenDone(), { tools });
+  await began.promise;
+  expect(seen[0]!.steered.aborted).toBe(false);
+
+  steer("hurry");
+  expect([seen[0]!.steered.aborted, seen[0]!.interrupted.aborted, seen[0]!.signal.aborted]).toEqual([true, false, false]);
+  running!.deliver({ kind: "withdraw", inbox: "notes" });
+
+  expect(await done).toBe("done");
+  expect(seen[0]!.steered.aborted).toBe(true);
+  expect(trail()).toEqual(["model_call", "partial", "model_call"]);
+});
+
+test("a steer the model call read never fires a later call's ctx.steered", async () => {
+  const tools = waitTools([], (ctx) => String(ctx.steered.aborted));
+
+  expect(await run(chatFlow({ tools: ["wait"] }), waitThenDone(), { tools, before: ["early"] })).toBe("done");
+  expect(trail()).toEqual(["steer", "model_call", "false", "model_call"]);
+});
+
+test("calls running together each have their own ctx.steered: a steer fires the running ones, not one that returned", async () => {
+  const seen: ToolContext[] = [];
+  const waiting = Promise.withResolvers<void>();
+  const quick = Promise.withResolvers<void>();
+  let begun = 0;
+  const tools = waitTools(
+    seen,
+    async (ctx, id) => {
+      if (id === "quick") return "quick";
+      if (++begun === 2) waiting.resolve();
+      return (await aborted(ctx.steered), `${id} partial`);
+    },
+    true,
+  );
+  const calls = reply("", ["wait", { id: "quick" }, "c1"], ["wait", { id: "a" }, "c2"], ["wait", { id: "b" }, "c3"]);
+  const onEvent = (event: unknown) => void (event instanceof ToolCallFinished && event.toolCallId === "c1" && quick.resolve());
+  const done = run(chatFlow({ tools: ["wait"] }), new ScriptedModel([calls, reply("done")], CONFIG), { tools, onEvent });
+  await Promise.all([waiting.promise, quick.promise]);
+  steer("hurry");
+
+  expect(await done).toBe("done");
+  expect(seen.map((ctx) => ctx.steered.aborted)).toEqual([false, true, true]);
+  expect(trail()).toEqual(["model_call", "quick", "a partial", "b partial", "steer", "model_call"]);
+});
+
+test.each<[string, (ctx: ToolContext) => Promise<unknown>]>([
+  ["an abortable timer's AbortError", (ctx) => sleepMs(30_000, undefined, { signal: ctx.steered })],
+  ["the signal's own reason", (ctx) => aborted(ctx.steered).then(() => Promise.reject(ctx.steered.reason))],
+])("a tool that rejects with its steer's abort (%s) gets the steered result, and the agent reads the steer next", async (_name, body) => {
+  const began = Promise.withResolvers<void>();
+  const tools = waitTools([], (ctx) => (began.resolve(), body(ctx)));
+  const done = run(chatFlow({ tools: ["wait"] }), waitThenDone(), { tools });
+  await began.promise;
+  steer("hurry");
+
+  expect(await done).toBe("done");
+  expect(trail()).toEqual(["model_call", TOOL_STEERED_OUTCOME, "steer", "model_call"]);
+  const result = running!.log.records().find(({ record }) => record instanceof NodeStepRecord && record.step["kind"] === "tool_result");
+  expect((result!.record as NodeStepRecord).step["is_error"]).toBe(true);
+});
+
+/** A steer inbox double for a direct loop that counts its send listeners; `send` queues a steer, `cut` interrupts at seq 7. */
+function countingInbox() {
+  const listeners = new Set<() => void>();
+  const queue: string[] = [];
+  const interrupt = new AbortController();
+  let by: number | null = null;
+  const inbox: SteerInbox = {
+    inbox: "notes",
+    interrupt: interrupt.signal,
+    interruptedBy: () => by,
+    onSend: (listener) => (listeners.add(listener), () => void listeners.delete(listener)),
+    queuedBesidesActions: () => queue.length > 0,
+    read: () => (queue.length === 0 ? null : { n: 0, from: queue.map((_, index) => 100 + index), values: queue.splice(0) }),
+  };
+  const send = (value: string) => {
+    queue.push(value);
+    for (const listener of [...listeners]) listener();
+  };
+  const cut = () => {
+    by = 7;
+    interrupt.abort();
+  };
+  return { inbox, listeners, send, cut };
+}
+
+test("a running call holds one send listener, and none is left after a result, an error, a steer or an interrupt", async () => {
+  const box = countingInbox();
+  const during: number[] = [];
+  const tools = waitTools([], async (ctx) => {
+    during.push(box.listeners.size);
+    if (during.length === 2) throw new ReportedToolError("not yet");
+    if (during.length === 3) queueMicrotask(() => box.send("hurry"));
+    if (during.length === 4) box.cut();
+    if (during.length >= 3) await aborted(during.length === 3 ? ctx.steered : ctx.interrupted);
+    return "ok";
+  });
+  const replies = ["c1", "c2", "c3", "c4"].map((id) => reply("", ["wait", {}, id]));
+  const model = new ScriptedModel([...replies, reply("done")], CONFIG);
+
+  const out = await runAgent(agentContext(model, { tools: ["wait"], toolset: tools, steerInbox: box.inbox }));
+  expect(out).toEqual(new Interrupted(7));
+  expect(during).toEqual([1, 1, 1, 1]);
+  expect(box.listeners.size).toBe(0);
+});
+
+test("a steer withdrawn before the call starts leaves ctx.steered unfired", async () => {
+  const seen: ToolContext[] = [];
+  const tools = waitTools(seen, (ctx) => String(ctx.steered.aborted));
+  const onEvent = (event: unknown) => {
+    if (!(event instanceof ModelCallStarted) || event.n !== 1) return;
+    steer("hurry");
+    running!.deliver({ kind: "withdraw", inbox: "notes" });
+  };
+
+  expect(await run(chatFlow({ tools: ["wait"] }), waitThenDone(), { tools, onEvent })).toBe("done");
+  expect(trail()).toEqual(["model_call", "false", "model_call"]);
+});
+
+test("an agent without a steer inbox: its tool's ctx.steered never fires", async () => {
+  const seen: ToolContext[] = [];
+  const tools = waitTools(seen, (ctx) => (steer("now"), String(ctx.steered.aborted)));
+
+  expect(await run(chatFlow({ steerInbox: false, tools: ["wait"] }), waitThenDone(), { tools, before: ["early"] })).toBe("done");
+  expect(trail()).toEqual(["model_call", "false", "model_call"]);
+  expect(unread()).toEqual(["early", "now"]);
+});
+
+/** A take of `messages` and `queued`, then an agent steered by `messages` alone, granted `wait`. */
+const QUEUE_FLOW = `
+id: queue
+name: queue
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  messages: !Inbox(Message)
+  queued: !Inbox(Message)
+nodes:
+  heard:
+    kind: call
+    call: take
+    input:
+      from:
+        - \${input.messages}
+        - \${input.queued}
+      take: all
+  chat:
+    kind: agent
+    input:
+      count: \${len(heard.output.events)}
+    steer_inbox: \${input.messages}
+    tools: [wait]
+    prompt: Answer the \${count} messages.
+    output: !str
+output: \${chat.output}
+`;
+
+test("only a steer fires ctx.steered: a send to a take's queue inbox, or an action, leaves it unfired", async () => {
+  const log = join(dir, "queue.jsonl");
+  const flow = await loadFlow(QUEUE_FLOW);
+  const fired: boolean[] = [];
+  /** Send `event` to `inbox` while the tool waits, then note whether its `ctx.steered` had fired. */
+  const sent = async (ctx: ToolContext, inbox: string, event: unknown) => {
+    await send(log, inbox, event, { env: NO_ENV });
+    fired.push(ctx.steered.aborted);
+  };
+  const said = (text: string) => ({ role: "user", parts: [{ type: "text", text }] });
+  const action = { role: "user", author: "Ada", parts: [{ type: "action", tool: "wait", summary: "Ada typed into the job" }] };
+  const wait = waitTool([], async (ctx) => {
+    await sent(ctx, "queued", said("after this turn"));
+    await sent(ctx, "messages", action);
+    await sent(ctx, "messages", said("hurry"));
+    return "partial";
+  });
+  const tools = { wait };
+  const model = waitThenDone();
+  const first = await runWith(flow, {}, model, { log, tools, runId: "r" });
+  expect(first.status, first.failure?.message).toBe("waiting");
+  await send(log, "queued", said("start"), { env: NO_ENV });
+
+  const done = await resumeWith(flow, log, model, { tools });
+  expect([done.status, done.output], done.failure?.message).toEqual(["succeeded", "done"]);
+  expect(fired).toEqual([false, false, true]);
+  expect([...done.unread.keys()]).toEqual(["queued"]);
+});
+

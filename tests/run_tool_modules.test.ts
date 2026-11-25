@@ -21,7 +21,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ToolResultPart } from "../src/llm/messages.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
-import { advance, agentCall, agentCalls, complete, interrupt, pendingCalls, runFlow, type RunFlowOptions } from "../src/run.ts";
+import { advance, agentCall, agentCalls, complete, interrupt, pendingCalls, runFlow, type RunFlowOptions, send } from "../src/run.ts";
 import { NodeStepRecord, readRunLog } from "../src/runtime/log.ts";
 import { TOOL_INTERRUPTED_OUTCOME } from "../src/nodes/agent/results.ts";
 import { pending } from "../src/tools/context.ts";
@@ -330,6 +330,30 @@ test.each([
   const steps = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord && record.nodeId === "a" ? [record.step] : []));
   expect(steps.map((step) => step["kind"])).toEqual(["model_call", "tool_result", "interrupted"]);
   expect(steps[1]).toMatchObject({ call_id: "c1", output, is_error: isError });
+});
+
+test("a steer sent while a module tool waits reaches it as ctx.steered on its thread: it returns early, and the agent reads the steer next", async () => {
+  const body = `(_args, ctx) => new Promise((resolve) => {
+    console.log("waiting");
+    if (ctx.steered.aborted) resolve("partial");
+    else ctx.steered.addEventListener("abort", () => resolve("partial"));
+  })`;
+  writeFileSync(join(dir, "crm.ts"), plain("wait", body));
+  const agent = "a:\n    kind: agent\n    prompt: go\n    tools: [crm]\n    steer_inbox: ${input.m}\n    output: !str";
+  const text = app({ crm: "./crm.ts" }, [agent], "input:\n  m: !Inbox(str)\noutput: ${a.output}\n");
+  const log = join(dir, "log.jsonl");
+  const model = new ScriptedModel([callReply(["crm_wait", {}, "c1"]), textReply("done")]);
+  const delivered: Promise<unknown>[] = [];
+  // The thread prints once the tool runs there; the host steers then.
+  const onConsole = () => void delivered.push(send(log, "m", "hurry", { env: hostEnv(dir) }));
+
+  const done = await run(text, { log, models: serving(model), onConsole });
+  await Promise.all(delivered);
+
+  expect([done.status, done.output]).toEqual(["succeeded", "done"]);
+  const steps = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord && record.nodeId === "a" ? [record.step] : []));
+  expect(steps.map((step) => step["kind"])).toEqual(["model_call", "tool_result", "steer", "model_call"]);
+  expect(steps[1]).toMatchObject({ call_id: "c1", output: "partial", is_error: false });
 });
 
 test.each([

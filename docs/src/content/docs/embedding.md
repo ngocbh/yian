@@ -656,7 +656,8 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 - **The group.** The model sees `<group>_status` and `<group>_wait`, which read a run's status, and
   `<group>_message`, `<group>_answer`, `<group>_interrupt`, `<group>_close_inbox`, `<group>_stop`
   and `<group>_approve`, which deliver to it. Each returns the run's status. `wait` waits at most
-  120 seconds on the driver's `scheduler`.
+  120 seconds on the driver's `scheduler`, and ends early once a [steer](#tools-and-skills)
+  waits for the agent calling it.
 - **Interrupt.** `<group>_interrupt` takes `run` and `inbox`.
   1. It takes back the model's own unread sends to that inbox (`withdraw` with the owner's
      `by`), never anyone else's. `by` names no node, so two agents of one owner run take back
@@ -796,7 +797,7 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   `node`, `context` (your app object; `undefined` for a [tool module](/code-and-tools/#tool-modules)'s
   tool, which runs on its own thread), `signal` (aborted when the call must end: the run stops, a
   sibling call fails, or the [flow call](/agents/#flows-as-tools) the tool runs in ends, as when
-  the agent that called the flow is interrupted) and `interrupted`.
+  the agent that called the flow is interrupted), `interrupted` and `steered`.
   Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
   could show one name are refused. `ToolOptions` (from `@ngocbh/yian/tools`) is the type of
   `tool()`'s options, so an options object written on its own
@@ -812,6 +813,36 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   inside that agent's flow call, which gets `ctx.signal` as the flow call ends; nor after the call
   returned. Its listeners run inside the host's `interrupt` call, so they must not throw. A
   memory's tools ignore it: their calls are short, and a write applies whole.
+- **Steers.** `ctx.steered` aborts once a [steer](/agents/#steering-and-interrupts) waits for the
+  agent that made the call: a message other than an action, sent to that agent's `steer_inbox:`.
+  A call that starts with one queued, such as one sent during the model call, finds it aborted. A
+  tool that waits can stop and return what it has; the model reads the steer after that result.
+  A send to another inbox, such as a [queue](/inboxes/#a-queue-the-steers-dont-read), never
+  aborts it, nor does a steer withdrawn before the call started. Once aborted it stays aborted,
+  even when the steer is then withdrawn. Like `interrupted`, it never fires for a TOOL node's
+  call, an agent without a `steer_inbox:`, or a call inside a flow call the agent made. A tool
+  that rejects with its abort instead, as a timer, `fetch` or `spawn` given the signal does, is
+  read as a call a new message stopped, its outcome unknown. Its listeners run inside the host's
+  `send` call, so they must not throw. An MCP server's tools and a memory's ignore it: an MCP call
+  runs to its end.
+
+  ```ts check=fragment
+  const runTests = tool({
+    name: "run_tests",
+    description: "Run the test suite and return its output.",
+    parameters: { type: "object", properties: {} },
+    execute: async (_args, ctx) => {
+      const job = startTests(); // your code: { id: string, done: Promise<void>, output(): string }
+      let finished = false;
+      const steered = new Promise((resolve) => ctx.steered.addEventListener("abort", resolve, { once: true }));
+      // Already aborted: a steer came during the model call.
+      if (!ctx.steered.aborted) await Promise.race([job.done.then(() => (finished = true)), steered]);
+      if (finished) return job.output();
+      // The job runs on; another of your tools, `read_job`, gives the model the rest later.
+      return `Still running as job ${job.id} (read_job reads the rest); the output so far:\n${job.output()}`;
+    },
+  });
+  ```
 - **MCP servers.** `mcpServer({ command, args })` or `mcpServer({ url, headers })` describes a
   server (an `https` url; `http` only on `localhost`, `127.0.0.1` or `[::1]`); pass it as a
   `tools` entry and its tools become one group. `concurrencySafe: true` (or a list of tool names)

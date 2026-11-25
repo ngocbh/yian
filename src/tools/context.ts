@@ -45,7 +45,8 @@ export function isPending(value: unknown): value is PendingMarker {
 }
 
 /**
- * Who is calling a tool, the host's app object, the call's abort signal, and its interrupt signal.
+ * Who is calling a tool, the host's app object, the call's abort signal, its interrupt signal, and
+ * its steer signal.
  *
  * @example
  * const place = (args: { symbol: string }, ctx: ToolContext<Broker>) =>
@@ -98,8 +99,20 @@ export class ToolContext<T = unknown> {
    * inside the host's `interrupt` call, so they must not throw.
    */
   readonly interrupted: AbortSignal;
+  /**
+   * Aborted once a steer waits for the agent making the call: a message besides an action, sent to
+   * its own steer inbox, that its next model call reads. Already aborted for a call that starts
+   * with one queued, such as one sent during the model call. A tool that waits may end early and
+   * return what it has; the model reads the steer after the result. Like any abort it stays
+   * aborted, even when the steer is then withdrawn; one withdrawn before the call started never
+   * aborts it. It never aborts for a send to another inbox, for a call from a TOOL node, from an
+   * agent without a steer inbox, or from inside a flow call the agent made, nor once the call
+   * returned. A rejection with its abort fails the call as any error does. Its abort listeners run
+   * inside the host's `send` call, so they must not throw.
+   */
+  readonly steered: AbortSignal;
 
-  /** Build a frozen context from its fields; without `interrupted`, a signal that never aborts. */
+  /** Build a frozen context from its fields; without `interrupted` or `steered`, a signal that never aborts. */
   constructor(fields: {
     callId: string;
     attempt: number;
@@ -109,6 +122,7 @@ export class ToolContext<T = unknown> {
     context: T;
     signal: AbortSignal;
     interrupted?: AbortSignal;
+    steered?: AbortSignal;
   }) {
     this.callId = fields.callId;
     this.attempt = fields.attempt;
@@ -118,6 +132,7 @@ export class ToolContext<T = unknown> {
     this.context = fields.context;
     this.signal = fields.signal;
     this.interrupted = fields.interrupted ?? new AbortController().signal;
+    this.steered = fields.steered ?? new AbortController().signal;
     Object.freeze(this);
   }
 }

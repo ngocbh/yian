@@ -6,8 +6,8 @@
  * A session's outcomes and errors map to tool errors: a refusal is a permanent reported error the
  * model reads, a busy memory a reported one it may try again, and a reused change id a permanent
  * error. A transient provider error, such as an embedder's rate limit, is a reported error the model
- * may try again. A memory call ignores `ctx.interrupted`: it is short, and a write applies whole,
- * so an interrupt waits for it.
+ * may try again. A memory call ignores `ctx.interrupted` and `ctx.steered`: it is short, and a
+ * write applies whole, so an interrupt waits for it.
  *
  * It imports `tools`, `llm` (its errors), `typesys` and `diagnostics` only. The caller passes the author's kind and
  * static name, since it can't read node ids here.

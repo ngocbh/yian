@@ -200,7 +200,7 @@ function inboxDouble(queue: Value[] = []) {
   let seq = 100;
   const inbox: SteerInbox = {
     inbox: "notes",
-    interrupt: new AbortController().signal, interruptedBy: () => null,
+    interrupt: new AbortController().signal, interruptedBy: () => null, onSend: () => () => {},
     queuedBesidesActions: () => queue.length > 0,
     read: () => {
       if (queue.length === 0) {

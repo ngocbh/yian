@@ -227,8 +227,8 @@ export class ToolModuleThread {
    * `execute` gets the validator's output the thread kept, else a fresh copy of the arguments; on a
    * fresh thread the arguments are checked again first. Its context there holds `ctx`'s call id,
    * attempt, run id and node, the export name as its tool name, and no host object; a stop of
-   * `ctx.signal` aborts its signal there, an abort of `ctx.interrupted` its `interrupted`, and the
-   * call settles as the tool does. Once it settles, the thread releases the kept output, unless a
+   * `ctx.signal` aborts its signal there, an abort of `ctx.interrupted` its `interrupted`, one of
+   * `ctx.steered` its `steered`, and the call settles as the tool does. Once it settles, the thread releases the kept output, unless a
    * TOOL node may try the call again: its error is neither permanent nor a failed check, and no
    * stop ended it.
    *
@@ -245,14 +245,14 @@ export class ToolModuleThread {
     if (!(checked instanceof CheckedArgs)) {
       throw new YianTypeError(`${this.label} export ${reprText(tool)} takes the arguments its check returned`);
     }
-    const { callId, attempt, runId, node, signal, interrupted } = ctx;
+    const { callId, attempt, runId, node, signal, interrupted, steered } = ctx;
     const { check, args } = checked;
     const where = `tool ${reprText(ctx.toolName)} arguments`;
     let settled = true;
     try {
       const reply = await this.#request(
         (id) => ({ kind: "call", id, defaults: current(), tool, args, check, where, callId, attempt, runId, node }),
-        { signal, interrupted, sink },
+        { signal, interrupted, steered, sink },
       );
       if (reply.as === "result") return toHost(unpackFiles(reply.value) as Value);
       if (reply.as === "pending") return pending();
@@ -330,24 +330,26 @@ export class ToolModuleThread {
   /**
    * Post the request `make` builds with a fresh id to the thread and return its reply. While it is
    * open, a stop of `signal` is posted as its abort, an abort of `interrupted` as its interrupt,
-   * and what the module prints goes to `sink`.
+   * one of `steered` as its steer, and what the module prints goes to `sink`.
    *
    * @throws ToolModuleError when the thread failed or exits first.
    * @throws Error when the request can't be posted.
    */
   #send(make: (id: number) => ToolModuleRequest, options: RequestOptions = {}): Promise<ToolModuleReply> {
-    const { signal, interrupted, sink = null } = options;
+    const { signal, interrupted, steered, sink = null } = options;
     if (this.#ended !== null) return Promise.reject(this.#ended);
     const id = ++this.#lastId;
     const worker = this.#worker;
     const abort = (): void => worker.postMessage({ kind: "abort", id } satisfies ToolModuleRequest);
     const interrupt = (): void => worker.postMessage({ kind: "interrupt", id } satisfies ToolModuleRequest);
+    const steer = (): void => worker.postMessage({ kind: "steer", id } satisfies ToolModuleRequest);
     return new Promise((resolve, reject) => {
       const request = make(id);
       if (this.#open.size === 0) worker.ref();
       const release = () => {
         signal?.removeEventListener("abort", abort);
         interrupted?.removeEventListener("abort", interrupt);
+        steered?.removeEventListener("abort", steer);
       };
       this.#open.set(id, { resolve, reject, release, call: request.kind === "call", console: sink });
       try {
@@ -361,6 +363,8 @@ export class ToolModuleThread {
       else signal?.addEventListener("abort", abort, { once: true });
       if (interrupted?.aborted) interrupt();
       else interrupted?.addEventListener("abort", interrupt, { once: true });
+      if (steered?.aborted) steer();
+      else steered?.addEventListener("abort", steer, { once: true });
     });
   }
 
@@ -427,12 +431,13 @@ export class ToolModuleThread {
 }
 
 /**
- * How a request is sent: the stop that aborts it, the interrupt posted to its call, and what takes
- * the lines the module prints while it is open.
+ * How a request is sent: the stop that aborts it, the interrupt and the steer posted to its call,
+ * and what takes the lines the module prints while it is open.
  */
 interface RequestOptions {
   readonly signal?: AbortSignal;
   readonly interrupted?: AbortSignal;
+  readonly steered?: AbortSignal;
   readonly sink?: ConsoleSink | null;
 }
 

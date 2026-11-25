@@ -385,8 +385,14 @@ export class FlowEngine {
    * each: its commit's `from`. Taken when the node's outcome is committed.
    */
   readonly #reads = new Map<string, Map<string, number>>();
-  /** The steer inbox each running node opened and the controller of its interrupt signal, until its outcome commits. */
-  readonly #steerInboxes = new Map<string, { readonly inbox: string; readonly controller: AbortController }>();
+  /**
+   * The steer inbox each running node opened, the controller of its interrupt signal and the
+   * listeners to its sends (`SteerInbox.onSend`), until its outcome commits.
+   */
+  readonly #steerInboxes = new Map<
+    string,
+    { readonly inbox: string; readonly controller: AbortController; readonly listeners: Set<() => void> }
+  >();
   #ran = false;
   /** Whether a loop is driving the run; a delivery made after it ended publishes without it. */
   #looping = false;
@@ -451,8 +457,9 @@ export class FlowEngine {
    * Commit one host delivery synchronously, between two awaits of the loop. A cancel then aborts
    * the run signal: `run()` resolves with the cancelled state once running nodes have drained. An
    * interrupt names the running nodes that opened its inbox as their steer inbox, then the waiting
-   * ones, and aborts the running ones' interrupt signals. Then nudge the dispatcher and publish
-   * the observers.
+   * ones, and aborts the running ones' interrupt signals. A send calls the send listeners of the
+   * running nodes that opened its inbox as their steer inbox. Then nudge the dispatcher and
+   * publish the observers.
    *
    * @returns The appended seq and record (both null for a no-op; for a repeat of a keyed send,
    *   the first send's seq and no record) and the observers.
@@ -476,6 +483,12 @@ export class FlowEngine {
     const seq = prepared.expectedSequence;
     const observers = commitPrepared(log, state, prepared);
     if (state.result instanceof RunCancelled) this.#controller.abort(this.#cancelled);
+    // A running reader's tools learn of a send to its steer inbox in the same synchronous section.
+    if (delivery.kind === "send") {
+      for (const opened of this.#steerInboxes.values()) {
+        if (opened.inbox === delivery.inbox) for (const listener of [...opened.listeners]) listener();
+      }
+    }
     // In the same synchronous section as the record, so a running reader sees both at once.
     if (prepared.record instanceof InterruptedRecord) {
       for (const nodeId of prepared.record.nodes) this.#steerInboxes.get(nodeId)?.controller.abort();
@@ -786,7 +799,8 @@ export class FlowEngine {
    * Return the opener of a just-started node's steer inbox when the node declares
    * `readsSteerInbox`, else `null`. Opening registers the node as reading that inbox until its
    * outcome commits, with an interrupt signal that an interrupt of the inbox aborts (aborted at
-   * once when the node holds a pending interrupt). A node that opens an inbox while a Stop on it
+   * once when the node holds a pending interrupt), and the listeners to the inbox's sends, which
+   * `deliver` calls right after each send's record. A node that opens an inbox while a Stop on it
    * stands is interrupted at once by its own `interrupted` record. A read is zero-wait: in one
    * synchronous section it takes every event a read may take now, appends them as one `steer` step
    * and returns their values, so no delivery lands between reading the queue and the append.
@@ -803,11 +817,16 @@ export class FlowEngine {
       // An interrupt recorded before this evaluation (it waited, or crashed), or the Stop just
       // applied, stands.
       if (state.waits.interrupts.has(nodeId)) controller.abort();
-      this.#steerInboxes.set(nodeId, { inbox, controller });
+      const listeners = new Set<() => void>();
+      this.#steerInboxes.set(nodeId, { inbox, controller, listeners });
       return {
         inbox,
         interrupt: controller.signal,
         interruptedBy: () => state.waits.interrupts.get(nodeId) ?? null,
+        onSend: (listener) => {
+          listeners.add(listener);
+          return () => void listeners.delete(listener);
+        },
         queuedBesidesActions: () =>
           availableUnread(state.waits, inbox).some((seq) => !isActionMessage(state.inboxEvents.get(seq)!.toObject())),
         read: () => {

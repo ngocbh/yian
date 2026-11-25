@@ -45,6 +45,7 @@ function inboxDouble(queue: unknown[] = [], interrupt = new AbortController().si
     inbox: "notes",
     interrupt,
     interruptedBy: () => (interrupt.aborted ? by : null),
+    onSend: () => () => {},
     queuedBesidesActions: () => queue.some((value) => !isActionMessage(value)),
     read: () => {
       if (queue.length === 0) {

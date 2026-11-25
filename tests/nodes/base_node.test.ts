@@ -124,7 +124,7 @@ test("a node that produces no messages refuses the message methods", () => {
 
 test("a node opts into its steer inbox through readsSteerInbox; the base node doesn't", () => {
   expect(new FuncNode("f").readsSteerInbox).toBe(false);
-  const caps: NodeCaps = { openSteerInbox: (inbox) => ({ inbox, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null }) };
+  const caps: NodeCaps = { openSteerInbox: (inbox) => ({ inbox, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null, onSend: () => () => {} }) };
   expect(caps.openSteerInbox!("m").read()).toBeNull();
 });
 

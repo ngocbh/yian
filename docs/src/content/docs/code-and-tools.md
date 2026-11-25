@@ -311,8 +311,9 @@ and `isConcurrencySafe` run before the host's [`beforeToolCall`](/embedding/#gat
 check, which reads the model's arguments, not the validator's output. Keep both free of effects: a
 checked call may be refused or held and never run.
 
-- `ctx` holds `callId`, `attempt`, `runId`, `node`, `toolName` (the export's name), `signal` and
-  [`interrupted`](/embedding/#tools-and-skills), which a stop and an interrupt abort on the thread.
+- `ctx` holds `callId`, `attempt`, `runId`, `node`, `toolName` (the export's name), `signal`,
+  [`interrupted`](/embedding/#tools-and-skills) and [`steered`](/embedding/#tools-and-skills),
+  which a stop, an interrupt and a waiting steer abort on the thread.
   `ctx.context` is `undefined`: the host's app object can't reach the thread.
 - What `console` prints during a call goes where the calling node's console goes: printed, or to
   a host's [`onConsole`](/embedding/#runflow-options). Lines printed at import, or after the call

@@ -473,7 +473,7 @@ describe("the steer inbox capability", () => {
         inbox,
         queuedBesidesActions: () => (calls.push("queuedBesidesActions"), false),
         read: () => (calls.push("read"), read()),
-        interrupt: new AbortController().signal, interruptedBy: () => null,
+        interrupt: new AbortController().signal, interruptedBy: () => null, onSend: () => () => {},
       };
     };
     return { open, calls };

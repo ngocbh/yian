@@ -11,8 +11,8 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 
 | Import | What it's for |
 |---|---|
-| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `release`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; the types of the [`beforeToolCall`](#gate-tool-calls) hook (`BeforeToolCall`, `GatedCall`, `GateContext`, `GateDecision`, `ToolSource`, `FlowCallScope`); host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `VectorDBMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic`; `authoredText` and `escapeAuthorTags` (see [Label speakers for an outside agent](#label-speakers-for-an-outside-agent)) |
-| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `iterRunRecordsBackwards`, `runRecordAt`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex`; `takeInboxes`, which reads a wait's `inbox` (one name, or the list a take of several reads) as a list; for runs that start flows of their own, `ChildFlows` and `childFlows` (see [Child flows](#child-flows)) |
+| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `release`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; `nodeView`, which reads one node of a run log (see [Inspect runs](#inspect-runs)); the types of the [`beforeToolCall`](#gate-tool-calls) hook (`BeforeToolCall`, `GatedCall`, `GateContext`, `GateDecision`, `ToolSource`, `FlowCallScope`); host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `VectorDBMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic`; `authoredText` and `escapeAuthorTags` (see [Label speakers for an outside agent](#label-speakers-for-an-outside-agent)) |
+| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `iterRunRecordsBackwards`, `runRecordAt`, `foldRunLog`, `agentCalls`, `agentCall`, `nodeView`, `updateRunIndex` and `readRunIndex`; `takeInboxes`, which reads a wait's `inbox` (one name, or the list a take of several reads) as a list; for runs that start flows of their own, `ChildFlows` and `childFlows` (see [Child flows](#child-flows)) |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, the ask handler types `AskHandler` and `AskRequest`, and the `beforeToolCall` types |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
@@ -881,6 +881,7 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 | `runRecordAt(log, seq)` | The record of one seq, or `null`, found by bisecting the log's lines |
 | `foldRunLog(log)` | Each record with the value it wrote |
 | `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, each with the tool calls its reply asked for, and one call's full request and reply |
+| `nodeView(log, nodeId, attempt)` | One start of any node: its kind, status, times, inputs and outputs (see below) |
 | `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then. An update with nothing new takes no write lock, and one that writes commits every 200 runs; `{ runIds }` updates only those runs, as when one ends. `readRunIndex(runsDir, { result: false })` leaves out each row's `result` |
 
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
@@ -901,6 +902,26 @@ its outcome until its agent records the closer, which a cancelled run's agent ne
 | `pending` | No result yet: it runs, waits on its answer or was released, or a crash cut it before its result and no resume has settled it |
 
 More outcomes may come, so show one you don't know as it is.
+
+`nodeView(log, nodeId, attempt, { env, codeRoot })` reads one attempt of a node of any kind,
+`attempt` counting its starts from 1 (a resume that restarts a node starts the next). A grown
+node goes by its own id, such as `count#1/step`, and the run, each call, map item, loop turn and
+agent's flow call has its own `__start__` and `__end__`. It gives:
+
+- `kind`, `status` (`running`, `waiting`, `succeeded`, `routed`, `expanded`, `failed`,
+  `restarted`, or `ended` when a cancel, a run's failure or its flow call's end stopped it),
+  `startedAt` and `endedAt` (record times), the `failure`, and a route's case as `route`;
+- `inputs`: each declared input as `{name, type, value, missing}`, bound as the node bound it at
+  that start. A memory input is the `MemoryRef` the run recorded; its store isn't opened;
+- `outputs`: `output`, and an agent's `new_messages`, as the node's success accepted them, derived
+  values rebuilt. A `call`, `map` or `loop` expands instead: its `__end__`, or the last turn's
+  driver (`count~2`), writes its output.
+
+Values are yian's, an int as a `bigint`. `env` and `codeRoot` are the run's, as for `foldRunLog`.
+When the recorded flow doesn't load, such as when a CODE file is gone or `env` lacks a `YIAN_*`
+value the run recorded, `missing` says why: `kind` and `inputs` are `null`, each `type` is `null`,
+and an output the log holds only as pointers has a `null` value with that reason. An agent's
+model calls are `agentCalls` and `agentCall`.
 
 `iterRunRecordsBackwards` takes `iterRunRecords`' `kinds`, `payloads` and `maxLineBytes`. Each
 entry's `offset` is the cursor for the page before it, so a chat can show its newest turns and
@@ -937,14 +958,14 @@ it is moving can pass `{ lockProbe: false }`: each row then has the status its r
 
 `iterRunRecords` holds one line in memory at a time, so a huge line takes that much. Pass
 `maxLineBytes` to cap it. `inspectRun`, `loadRecordedFlow`, `foldRunLog`, `agentCalls`,
-`agentCall`, `pendingCalls` and `updateRunIndex` take it in their options too. A longer line isn't
-parsed: it is read through to its newline, in memory that stays within a small multiple of the
-limit however the line nests, and throws `RunLogLineTooLongError`, whose message names the line
-and the limit. The error holds the line's `offset`, `end` and `length`, and its `seq`, `runId`,
-`kind` and `nodeId`. A scan of the line's bytes reads those four, keeping at most the limit of
-their values, and gives `null` for one it can't read. `updateRunIndex` doesn't throw it: it skips
-that log with a warning, as it skips any log it can't read. To read on past a long line with
-`iterRunRecords`:
+`agentCall`, `nodeView`, `pendingCalls` and `updateRunIndex` take it in their options too. A longer
+line isn't parsed: it is read through to its newline, in memory that stays within a small multiple
+of the limit however the line nests, and throws `RunLogLineTooLongError`, whose message names the
+line and the limit. The error holds the line's `offset`, `end` and `length`, and its `seq`,
+`runId`, `kind` and `nodeId`. A scan of the line's bytes reads those four, keeping at most the
+limit of their values, and gives `null` for one it can't read. `updateRunIndex` doesn't throw it:
+it skips that log with a warning, as it skips any log it can't read. To read on past a long line
+with `iterRunRecords`:
 
 ```ts check=fragment
 import { iterRunRecords, RunLogLineTooLongError } from "@ngocbh/yian/run";

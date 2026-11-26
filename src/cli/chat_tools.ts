@@ -37,8 +37,8 @@ import { isSystemError, leavesRoot, resolvedPath } from "../platform.ts";
 import { type RunStartTool, runStartTools } from "../run.ts";
 import { isReportedToolError, ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, stringArg, stringArguments, tool } from "../tools/function_tools.ts";
-import { builtinType } from "../typesys/types.ts";
-import { canonicalTypeLabel, isInboxType, type Type } from "../typesys/values.ts";
+import { shownTypeLabel } from "../typesys/types.ts";
+import { isInboxType } from "../typesys/values.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
 import { renderDiagnostic } from "./render.ts";
@@ -347,14 +347,6 @@ async function checkedFlow(
   const tools = runStartTools(flow);
   const check = { ok: true, name: flow.name ?? flow.compiled.flowId, inputs, run_start_tools: tools, error: null };
   return { check, flow };
-}
-
-/**
- * `type`'s label as the model reads it: the canonical one, with the built-in `Message` record
- * written by its name rather than field by field.
- */
-function shownTypeLabel(type: Type): string {
-  return canonicalTypeLabel(type).replaceAll(canonicalTypeLabel(builtinType("Message")!), "Message");
 }
 
 /** `text` cut to at most `FOCUS_BYTES` of UTF-8, between characters, with a note when it was cut. */

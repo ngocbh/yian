@@ -34,7 +34,9 @@
  * a decoded `Message` back with its files, `checkConversation` and `ConversationError`, from
  * `nodes/agent/messages.ts`). For hosts that show an AGENT's model calls it exports `agentCalls`,
  * which lists a log's calls from its steps, and `agentCall`, which rebuilds one call's request and
- * reads its attempts, reply and tool results.
+ * reads its attempts, reply and tool results; for hosts that show one node of any kind, `nodeView`,
+ * which reads one attempt's kind, status, times, inputs and outputs (`NodeView`, `NodeValue`,
+ * `NodeStatus`).
  *
  * A run binds each memory input to the instance its host passes (`runtime/memories.ts`): before
  * `RunStarted` it opens and snapshots each into the value START's inputs record, and a resume
@@ -51,7 +53,7 @@ import { chmodSync, mkdirSync, realpathSync, rmdirSync, statSync } from "node:fs
 import { basename, dirname, join, resolve } from "node:path";
 import { types } from "node:util";
 
-import { localTypes } from "./compile/declared_types.ts";
+import { itemDeclaredType, localTypes, nodeOutputType } from "./compile/declared_types.ts";
 import { buildGrow } from "./compile/expand.ts";
 import {
   applyEffectiveLlmMap,
@@ -69,11 +71,22 @@ import { flowFingerprint } from "./compile/manifest.ts";
 import { type CompiledFlow, copyGraph, type Flow, nodeChildren, type StaticChild } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
+import { LoadError } from "./compose/helpers/errors.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { memoryToolNames, memoryTypeTools } from "./compose/helpers/memory.ts";
 import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
-import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
+import {
+  checkRecorded,
+  current,
+  type Defaults,
+  DefaultsError,
+  DefaultsMismatchError,
+  type Env,
+  nonDefaults,
+  processEnv,
+  withEnv,
+} from "./defaults.ts";
 import { closeness, compareCodeUnits, type Failure, getCloseMatches, noteCleanup, reprText } from "./diagnostics.ts";
 import {
   CallClosed,
@@ -146,6 +159,8 @@ import {
   NodeStartedRecord,
   NodeStepRecord,
   NodeSucceededRecord,
+  NodeWaitingRecord,
+  NodeWokenRecord,
   PoolCommitRecord,
   readRunLog,
   type RecordedSkill,
@@ -232,20 +247,22 @@ import {
 import { toolTypes } from "./tools/types.ts";
 import { YianRangeError, YianTypeError } from "./typesys/errors.ts";
 import { type JsonObject, logJson } from "./typesys/json.ts";
-import { VariablePool } from "./typesys/pool.ts";
+import { NEW_MESSAGES, VariablePool } from "./typesys/pool.ts";
 import { defaultRunId, seedSystemClock } from "./typesys/seeding.ts";
+import { newMessagesType, shownTypeLabel } from "./typesys/types.ts";
 import {
   canonicalTypeLabel,
   fromHost,
   isInboxType,
   isMemoryType,
   isRecord,
+  listKindForElement,
   MemoryRef,
   rejectDeepNesting,
   setField,
-  type Type,
+  Type,
   TypeCheckError,
-  type TypedValue,
+  TypedValue,
   type Value,
   ValueKind,
   type ValueRecord,
@@ -3560,6 +3577,291 @@ export async function agentCall(
     // The honor is the node's last step, so it follows its last call.
     interrupted: last.step["finish"] === "interrupted" || (folded.honored !== null && exchange === calls.at(-1)),
   };
+}
+
+/**
+ * Where one attempt of a node stands, as `nodeView` reads it from the run log:
+ * - `running`: started and not ended: in flight, or the run stopped or crashed with it in flight
+ *   and no resume has restarted it yet;
+ * - `waiting`: waiting on a host call, an inbox or a time;
+ * - `succeeded`, `routed` (a CASE), `failed`;
+ * - `expanded`: a CALL, MAP or LOOP grew its body, whose END (or the last turn's driver) writes
+ *   the node's output;
+ * - `restarted`: a resume ran the node again, as its next attempt;
+ * - `ended`: ended with no outcome of its own, when a failure or an interrupt ended the flow call
+ *   it ran in, or the run was cancelled or failed.
+ */
+export type NodeStatus = "running" | "waiting" | "succeeded" | "routed" | "expanded" | "failed" | "restarted" | "ended";
+
+/** One input or output of a node, as `nodeView` reads it. */
+export interface NodeValue {
+  /** The input's name; for an output, the name a binding reads it by: `output`, or an AGENT's `new_messages`. */
+  readonly name: string;
+  /** Its declared type's label, such as `list(Message)`, or `Any` when undeclared; `null` when the flow didn't load. */
+  readonly type: string | null;
+  /**
+   * The value as yian holds it: an int as a bigint, a memory as the `MemoryRef` the run recorded;
+   * `null` too when it couldn't be rebuilt (see `missing`).
+   */
+  readonly value: Value;
+  /** Why the value couldn't be rebuilt; `null` when it was. */
+  readonly missing: string | null;
+}
+
+/** One attempt of a node as `nodeView` reads it. */
+export interface NodeView {
+  /** The node, as the log names it (a grown node's own id, such as `loop#2/step`). */
+  readonly nodeId: string;
+  /** Which start of the node this is, from 1: a resume that restarts the node starts the next. */
+  readonly attempt: number;
+  /** `agent`, `code`, `tool`, `case`, `loop`, `map`, `call`, `start` or `end`; `null` when the flow didn't load. */
+  readonly kind: string | null;
+  readonly status: NodeStatus;
+  /** When the attempt's `node_started` was appended. */
+  readonly startedAt: string;
+  /**
+   * When the record that ended the attempt was appended; `null` while it runs or waits, and for a
+   * restarted attempt, whose end the log doesn't hold.
+   */
+  readonly endedAt: string | null;
+  /**
+   * Each declared input as the node bound it at this start (a MAP's `over` list, whose items its
+   * children bind); `null` when they couldn't be rebuilt (see `missing`).
+   */
+  readonly inputs: readonly NodeValue[] | null;
+  /** What the attempt's success accepted: its output, then an AGENT's new messages; none without a success. */
+  readonly outputs: readonly NodeValue[];
+  /** The node's failure, or the terminal failure its route proved; else `null`. */
+  readonly failure: Failure | null;
+  /** The case a route took; else `null`. */
+  readonly route: string | null;
+  /**
+   * Why `inputs` is `null`: the run's flow doesn't load (so `kind` and the types are `null` too, and
+   * no derived output is rebuilt), or the node's binding fails; `null` when neither.
+   */
+  readonly missing: string | null;
+}
+
+/** What the log records of one attempt of a node, without its flow. */
+interface AttemptRecords {
+  readonly start: RunLogEntry;
+  readonly status: NodeStatus;
+  /** The record that ended the attempt, or `null`. */
+  readonly end: RunLogEntry | null;
+  readonly failure: Failure | null;
+  readonly route: string | null;
+  /** The attempt's success, or `null`. */
+  readonly success: NodeSucceededRecord | null;
+}
+
+/**
+ * Read one attempt of a node of the run log at `log`: its kind, status, start and end times, its
+ * declared inputs, its outputs, a failure, and a route's case.
+ *
+ * The status, times, failure and case are read from the records. The inputs and outputs are
+ * rebuilt as `foldRunLog` rebuilds values: the log is replayed over the recorded flow, compiled
+ * under `env`'s `YIAN_*` values, up to the attempt's end. Each input is bound from the pool when
+ * the attempt starts, by the binding the run itself ran, so a memory input reads as the value the
+ * run recorded and its store is never opened. Each output is the value the attempt's success
+ * accepted, a derived one (a child START's, a turn's END's, a take's, an AGENT's new messages)
+ * rebuilt from what it points at.
+ *
+ * When the flow doesn't load (a CODE file or tool module gone, or `env` lacking the `YIAN_*`
+ * values the run recorded), the view says why in `missing`: the records still give the status,
+ * times, failure, case and any output the log holds as a value (read without its type, so a file
+ * inside a record stays its recorded mapping), and `kind`, the inputs, the types and a derived
+ * output are `null`.
+ *
+ * An AGENT's model calls are `agentCalls` and `agentCall`.
+ *
+ * @param log The JSONL run log.
+ * @param nodeId The node, as the log names it.
+ * @param attempt Which of the node's starts, from 1.
+ * @param options.env The environment the load reads `YIAN_*` values from (default `processEnv`).
+ * @param options.flow The flow, required when the run's flow was built in code, refused otherwise.
+ * @param options.codeRoot As `foldRunLog`'s.
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
+ *   line throws `RunLogLineTooLongError`.
+ * @returns The attempt's view.
+ * @throws RangeError when `attempt` isn't a positive integer, or the log has no such start of
+ *   `nodeId`; `foldRunLog`'s errors, except the load's, which give the view above.
+ *
+ * @example
+ * const view = await nodeView(log, "summary", 1);
+ * show(view.kind, view.status, view.startedAt, view.endedAt, view.inputs, view.outputs);
+ */
+export async function nodeView(
+  log: string,
+  nodeId: string,
+  attempt: number,
+  options: {
+    env?: Env | null;
+    flow?: ComposedFlow | null;
+    codeRoot?: string | null;
+    maxLineBytes?: number | null;
+  } = {},
+): Promise<NodeView> {
+  if (!Number.isSafeInteger(attempt) || attempt < 1) throw new YianRangeError("attempt must be a positive integer");
+  const env = options.env ?? processEnv;
+  const root = resolvedRoot(options.codeRoot);
+  const entries = [...iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })];
+  const start = startRecord(entries[0]?.envelope);
+  const records = attemptRecords(entries, nodeId, attempt);
+  if (records === null) {
+    throw new YianRangeError(`run log ${log} has no attempt ${attempt} of node ${reprText(nodeId)}`);
+  }
+  const seen = {
+    nodeId,
+    attempt,
+    status: records.status,
+    startedAt: records.start.at,
+    endedAt: records.end?.at ?? null,
+    failure: records.failure,
+    route: records.route,
+  };
+  let flow: ComposedFlow;
+  try {
+    flow = await withEnv(env, () => {
+      checkRecorded(start.defaults);
+      checkCodeRoot(log, start, root);
+      return resumedFlow(log, start, options.flow ?? null);
+    });
+  } catch (error) {
+    // The flow's files or the run's `YIAN_*` values are gone, not a wrong call.
+    if (!(error instanceof LoadError || error instanceof DefaultsError || error instanceof DefaultsMismatchError)) {
+      throw error;
+    }
+    const missing = `the run's flow doesn't load: ${error.message}`;
+    return { ...seen, kind: null, inputs: null, outputs: recordedOutputs(entries, records.success, missing), missing };
+  }
+  let kind: string | null = null;
+  let bound: Pick<NodeView, "inputs" | "missing"> = { inputs: null, missing: null };
+  let outputs: NodeValue[] = [];
+  let starts = 0;
+  const last = (records.end ?? records.start).seq;
+  withEnv(env, () =>
+    replayRunLog(flow, MemoryRunLog.fromRecords(entries.slice(0, last + 1).map((entry) => entry.envelope)), {
+      onPrepared: (prepared, state) => {
+        const { record } = prepared;
+        if (record instanceof NodeStartedRecord && record.nodeId === nodeId && ++starts === attempt) {
+          const node = state.flow.nodes.get(nodeId)!;
+          kind = node.kind;
+          bound = boundInputs(node, state);
+        } else if (records.success !== null && prepared.expectedSequence === last) {
+          const node = state.flow.nodes.get(nodeId)!;
+          outputs = acceptedCommits(prepared).map(({ seq, value }) =>
+            seq === records.success!.commit
+              ? { name: "output", type: typeLabel(nodeOutputType(state.flow, node)), value: value.value, missing: null }
+              : { name: NEW_MESSAGES, type: typeLabel(newMessagesType()), value: value.value, missing: null },
+          );
+        }
+      },
+    }),
+  );
+  return { ...seen, kind, ...bound, outputs };
+}
+
+/**
+ * Return what `entries`, a run log's records, hold of start `attempt` of `nodeId`: the start, and
+ * the record that ended it with its status, failure and case; `null` when there is no such start.
+ */
+function attemptRecords(entries: readonly RunLogEntry[], nodeId: string, attempt: number): AttemptRecords | null {
+  let starts = 0;
+  const at = entries.findIndex(({ envelope: { record } }) => {
+    if (record instanceof NodeStartedRecord && record.nodeId === nodeId) starts += 1;
+    return starts === attempt;
+  });
+  if (at === -1) return null;
+  const start = entries[at]!;
+  // A flow call's scope, and the scopes under an interrupted agent, hold the nodes under them.
+  const inScope = (scope: string) => nodeId.startsWith(`${scope}/`);
+  let status: NodeStatus = "running";
+  for (const entry of entries.slice(at + 1)) {
+    const { record } = entry.envelope;
+    const ended = (ending: NodeStatus, more: Partial<AttemptRecords> = {}): AttemptRecords => ({
+      start,
+      status: ending,
+      end: entry,
+      failure: null,
+      route: null,
+      success: null,
+      ...more,
+    });
+    if (record instanceof NodeStartedRecord && record.nodeId === nodeId) {
+      return { ...ended("restarted"), end: null };
+    } else if (record instanceof NodeWaitingRecord && record.nodeId === nodeId) {
+      status = "waiting";
+    } else if (record instanceof NodeWokenRecord && record.nodeId === nodeId) {
+      status = "running";
+    } else if (record instanceof NodeSucceededRecord && record.nodeId === nodeId) {
+      return ended("succeeded", { success: record });
+    } else if (record instanceof NodeRoutedRecord && record.nodeId === nodeId) {
+      return ended("routed", { route: record.handle, failure: record.terminalFailure });
+    } else if (record instanceof NodeExpandedRecord && record.spawnerId === nodeId && record.callId === null) {
+      return ended("expanded");
+    } else if (record instanceof NodeFailedRecord) {
+      // A failure outside a flow call fails the run; inside one, it ends the call's scope. One that
+      // names the agent itself (the scope couldn't grow) fails only the call: the agent goes on.
+      const { failure, scope } = record;
+      if (failure.nodeId === nodeId && (scope === null || inScope(scope))) return ended("failed", { failure });
+      if (scope === null || inScope(scope)) return ended("ended");
+    } else if (record instanceof InterruptedRecord && record.nodes.some(inScope)) {
+      return ended("ended");
+    } else if (record instanceof RunCancelledRecord || record instanceof RunFailedRecord) {
+      return ended("ended");
+    }
+  }
+  return { start, status, end: null, failure: null, route: null, success: null };
+}
+
+/**
+ * The declared inputs of `node`, bound from `state`'s pool as the evaluator binds them when it
+ * starts; a node that binds per item (a MAP) shows the list it binds its items from instead.
+ */
+function boundInputs(node: Node, state: RunState): Pick<NodeView, "inputs" | "missing"> {
+  let bound: Record<string, unknown>;
+  try {
+    bound = bindStarted(node, state.flow, state.pool, state.wiringOverrides.get(node.id) ?? null);
+  } catch (error) {
+    if (!(error instanceof BindingError)) throw error;
+    return { inputs: null, missing: `its binding fails: ${error.message}` };
+  }
+  const read = (name: string, type: Type | null): NodeValue => ({
+    name,
+    type: typeLabel(type),
+    value: Object.hasOwn(bound, name) ? (bound[name] as Value) : null,
+    missing: null,
+  });
+  if (node.bindsPerItem) {
+    const item = itemDeclaredType(state.flow, node);
+    const list = item === null ? null : new Type({ kind: listKindForElement(item), element: item });
+    return { inputs: [read(node.itemSourceKey!, list)], missing: null };
+  }
+  const types = localTypes(state.flow, node);
+  return { inputs: node.dataInputNames().map((name) => read(name, types.get(name) ?? null)), missing: null };
+}
+
+/**
+ * The outputs `success` accepted, as the records in `entries` hold them: a commit's value when it
+ * holds one, else `null` with the reason `missing`, as for an AGENT's new messages.
+ */
+function recordedOutputs(
+  entries: readonly RunLogEntry[],
+  success: NodeSucceededRecord | null,
+  missing: string,
+): NodeValue[] {
+  if (success === null) return [];
+  const commit = entries[success.commit]!.envelope.record as PoolCommitRecord;
+  const output: NodeValue =
+    commit.value === null
+      ? { name: "output", type: null, value: null, missing }
+      : { name: "output", type: null, value: TypedValue.fromWire(commit.value).value, missing: null };
+  return success.messages === null ? [output] : [output, { name: NEW_MESSAGES, type: null, value: null, missing }];
+}
+
+/** `type`'s label as a view shows it, `Any` for an undeclared type. */
+function typeLabel(type: Type | null): string {
+  return type === null ? "Any" : shownTypeLabel(type);
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   type Bounds,
   BUILTIN_CONSTANTS,
   boundText,
+  canonicalTypeLabel,
   canonicalUnionOrder,
   IDENTIFIER_PATTERN,
   inboxType,
@@ -1035,6 +1036,14 @@ export function builtinType(name: string): Type | null {
     builtinTypes.set(name, typ);
   }
   return typ;
+}
+
+/**
+ * `type`'s label as a reader is shown it: the canonical one, with the built-in `Message` record
+ * written by its name rather than field by field.
+ */
+export function shownTypeLabel(type: Type): string {
+  return canonicalTypeLabel(type).replaceAll(canonicalTypeLabel(builtinType("Message")!), "Message");
 }
 
 let messagesType: Type | undefined;

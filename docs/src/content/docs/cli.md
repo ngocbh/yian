@@ -274,9 +274,11 @@ theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered l
 
 | Key | What it does |
 |---|---|
-| Enter | Sends the line. During a reply, the assistant reads it before its next step |
-| Esc | Takes back the lines you sent that the assistant hasn't read yet, and stops the reply. What you did yourself, such as a `/model` choice, stays sent, and the flows' reports wait for your next line |
-| Ctrl-C | Stops the reply, and the flows' reports wait for your next line. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
+| Enter | Sends the line. During a reply, the assistant reads it before its next step. On an empty box during a reply, moves the oldest queued line into the reply |
+| Alt+Enter, or Ctrl-X then Enter | During a reply, queues the line for the next turn. Elsewhere, sends it as Enter does |
+| ↑ on the box's first row | Takes the queued lines back into the box, before what it holds |
+| Esc | Takes back the lines you sent or queued that the assistant hasn't read yet, and stops the reply. What you did yourself, such as a `/model` choice, stays sent, and the flows' reports wait for your next line |
+| Ctrl-C | Stops the reply, and the flows' reports wait for your next line; the lines you queued start the next turn. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
 | `/` | Lists the commands |
 | `/model` | Picks the model of the next replies, and of the flows the assistant starts after it, from your logins |
 | `/provider` | Picks a provider, signing in to it as `yian auth` does when it has no saved login, then one of its models. A key set in the environment is saved only if you say so |
@@ -288,6 +290,11 @@ theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered l
 | Esc in the list | Goes back to the box |
 
 A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistant gets all of it.
+
+A queued line shows above the box as `queued: ...` until a turn reads it. Once the reply ends, the
+next turn reads every queued line, in the order you sent them, with any lines the reply didn't
+read. To delete one, take it back with ↑ and clear the box. `/exit` leaves once the queued lines
+have their turn.
 
 What you do yourself, such as choosing a model with `/model`, reaches the assistant as your action,
 signed `the user`. It starts no reply: the assistant reads it with your next message, and a

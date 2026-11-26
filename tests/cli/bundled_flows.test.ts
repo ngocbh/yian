@@ -55,13 +55,16 @@ test("the bundled compaction flow is examples/compact_history.yaml", () => {
   expect(flowText("compact_history.yaml")).toBe(readFileSync(example, "utf8"));
 });
 
-test("the bundled chat loads, with an Inbox(Message) and its optional inputs", async () => {
+test("the bundled chat loads, with two Inbox(Message) inputs and its optional ones", async () => {
   const flow = await loadChat();
   expect(flow.compiled.flowId).toBe("yian-chat");
-  const [inbox, ...rest] = flow.input;
+  const [inbox, queue, ...rest] = flow.input;
   expect([inbox!.name, inbox!.required]).toEqual(["owner_messages", true]);
-  const type = inbox!.contract!.type;
-  expect(isInboxType(type) && typeEquals(type!.element!, builtinType("Message")!)).toBe(true);
+  expect([queue!.name, queue!.required]).toEqual(["queued", true]);
+  for (const each of [inbox!, queue!]) {
+    const type = each.contract!.type;
+    expect(isInboxType(type) && typeEquals(type!.element!, builtinType("Message")!)).toBe(true);
+  }
   const inputs = rest.map((param) => [
     param.name,
     canonicalTypeLabel(param.contract!.type),
@@ -375,14 +378,43 @@ async function chatFlowRun(replies: string[], inputs: Record<string, unknown> = 
     for (const message of messages) await send(log, "owner_messages", message);
     return advance({ ...options, log });
   };
-  const built = () => access.configs.map((c) => `${c["provider"]}/${c["model"]}`);
-  /** Close the inbox and move the run to its end. */
-  const closeChat = async () => {
-    await close(log, "owner_messages");
+  /** Send each of `messages` to the queue, then advance the run. */
+  const queue = async (...messages: Record<string, unknown>[]) => {
+    for (const message of messages) await send(log, "queued", message);
     return advance({ ...options, log });
   };
-  return { model, turn, built, close: closeChat, done: () => rmSync(dir, { recursive: true, force: true }) };
+  const built = () => access.configs.map((c) => `${c["provider"]}/${c["model"]}`);
+  /** Close the inboxes and move the run to its end. */
+  const closeChat = async () => {
+    await close(log, "owner_messages");
+    await close(log, "queued");
+    return advance({ ...options, log });
+  };
+  const done = () => rmSync(dir, { recursive: true, force: true });
+  return { log, options, model, turn, queue, built, close: closeChat, done };
 }
+
+test("a turn takes the queued lines with the messages in the order sent; the chat ends once both inboxes close", async () => {
+  const run = await chatFlowRun(["one", "Queueing", "two"]);
+  try {
+    await send(run.log, "queued", said("first"));
+    await send(run.log, "owner_messages", said("second"));
+    await run.queue(said("third"));
+    expect(run.model.requests).toHaveLength(2);
+    expect(userMessages(run.model.requests[0]!).map((m) => m["parts"])).toEqual(
+      ["first", "second", "third"].map((text) => [{ type: "text", text }]),
+    );
+    // A turn starts from the queue alone too.
+    await run.queue(said("fourth"));
+    expect(userMessages(run.model.requests[2]!).at(-1)!["parts"]).toEqual([{ type: "text", text: "fourth" }]);
+    // While the queue is open, closing the messages alone leaves the chat waiting.
+    await close(run.log, "owner_messages");
+    expect((await advance({ ...run.options, log: run.log })).status).toBe("waiting");
+    expect((await run.close()).status).toBe("succeeded");
+  } finally {
+    run.done();
+  }
+});
 
 test("the chat names itself once after its first answered turn, on the reply's model", async () => {
   const run = await chatFlowRun(["hello", "Greeting the assistant", "again"]);

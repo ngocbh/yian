@@ -90,6 +90,8 @@ const PERSON = CHAT_PERSON;
 
 /** The chat flow's inbox: the user's lines and the reports of its runs go there. */
 const CHAT_INBOX = "owner_messages";
+/** The chat flow's inbox for the lines the user queues for the next turn while a reply runs. */
+const CHAT_QUEUE = "queued";
 
 /** The options `chat` reads; an absent option is `undefined`, an absent flag `false`. */
 export interface ChatOptions {
@@ -948,6 +950,7 @@ export async function chat(
       const code = await inboxChat(
         CHAT_LABEL,
         {
+          inbox: CHAT_INBOX,
           inputValues: [],
           log: fresh.path,
           provider: options.provider,
@@ -962,6 +965,7 @@ export async function chat(
           inputs: sessionInputs,
           skills: new Map([[skill.name, skill]]),
           tools,
+          queue: CHAT_QUEUE,
           news: {
             subscribe: (heard) => {
               listener = heard;

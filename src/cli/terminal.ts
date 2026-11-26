@@ -505,12 +505,14 @@ export interface PromptCommand {
 }
 
 /**
- * What a key did at a `LineEditor`: Enter in the box answers its text (`value`), Enter on a list
- * row `open`s it, Escape in the box is `escape`, Ctrl-D in an empty box the end of input; `null`
- * when the key only edited or moved.
+ * What a key did at a `LineEditor`: Enter in the box answers its text (`value`), and Alt+Enter, or
+ * Ctrl-X then Enter, answers it to `queue`; Up on the box's first row while lines are queued is
+ * `recall`; Enter on a list row `open`s it, Escape in the box is `escape`, Ctrl-D in an empty box
+ * the end of input; `null` when the key only edited or moved.
  */
 export type EditorAction =
-  | { value: string }
+  | { value: string; queue?: true }
+  | { recall: true }
   | { open: string }
   | { escape: true }
   | { stop: "eof" }
@@ -544,6 +546,11 @@ const YIELD_GRACE_MS = 400;
  * move its highlight, Tab completes the highlighted command into the box, and Enter answers it,
  * or the text when that is a command. A paste never opens it. The box, its hint and the list stay
  * drawn under the menu, which shows as many rows as the screen leaves them, then `+N more`.
+ *
+ * With `queued`, the lines it gives are drawn dim above the menu and the box, one row each
+ * (`queued: <line>`), as many as fit, then `+N more`. Alt+Enter, or Ctrl-X then Enter (OpenCode's
+ * leader key, for a terminal that has no Alt), answers the text to queue; Ctrl-X before any other
+ * key leaves that key as it is. Up on the box's first row, while lines are queued, recalls them.
  */
 export class LineEditor {
   readonly #text = textWidget({ label: "", mark: ">", collapse: true });
@@ -566,12 +573,17 @@ export class LineEditor {
   #highlight = { index: 0, text: "" };
   /** The last fold, for the text's version and the width it was folded at. */
   #folded: { version: number; columns: number; fold: Fold } | null = null;
+  /** The lines queued, drawn above the box. */
+  readonly #queued: () => readonly string[];
+  /** Whether the last key was Ctrl-X, so an Enter now queues. */
+  #leader = false;
 
   /**
    * @param options.rows The screen's height, which the list keeps within; no bound when absent.
    * @param options.hint The dim line under the box; a function is read at each draw.
    * @param options.title What the box's top edge names (what it sends to, say), read at each draw
    *   and cut to fit; none when absent or empty. Drawn as given: sanitize it first.
+   * @param options.queued The lines queued, oldest first, read at each draw; none when absent.
    */
   constructor(options: {
     columns: () => number;
@@ -580,7 +592,9 @@ export class LineEditor {
     list?: PromptList | null;
     commands?: readonly PromptCommand[];
     title?: () => string;
+    queued?: () => readonly string[];
   }) {
+    this.#queued = options.queued ?? (() => []);
     this.#columns = options.columns;
     this.#commands = options.commands ?? [];
     this.#rows = options.rows ?? (() => Infinity);
@@ -701,14 +715,17 @@ export class LineEditor {
   }
 
   /**
-   * The menu's rows above the box and the list's under the hint, each at most what fits, its
-   * focused row among them, then `+N more`. Both leave `LIST_MARGIN` rows free above them, for
-   * what is drawn above the box; an open menu takes its rows first, leaving the list at least one.
+   * The queued lines' and the menu's rows above the box and the list's under the hint, each at
+   * most what fits, its focused row among them, then `+N more`. They leave `LIST_MARGIN` rows free
+   * above them, for what is drawn above the box; the queued lines take theirs first, then an open
+   * menu, leaving the list at least one.
    */
-  #around(): { menu: string[]; list: string[] } {
+  #around(): { queued: string[]; menu: string[]; list: string[] } {
     const { start, end } = this.#window();
-    // The box's text rows, its two edges and the hint.
-    const room = this.#rows() - LIST_MARGIN - (end - start + 3);
+    // The box's text rows, its two edges and the hint; the queued lines leave the others two rows.
+    const box = end - start + 3;
+    const queued = cut(this.#queuedRows(), null, Math.max(1, this.#rows() - LIST_MARGIN - box - 2));
+    const room = this.#rows() - LIST_MARGIN - box - queued.length;
     const list = this.list?.rows() ?? [];
     const matches = this.#matches();
     const free = Math.max(1, room - Math.min(1, list.length));
@@ -716,10 +733,19 @@ export class LineEditor {
     const focus = this.#find(list);
     const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
     const drawn = list.map((row, i) => pointer(i) + row.text);
-    return { menu, list: cut(drawn, focus, Math.max(1, room - menu.length)) };
+    return { queued, menu, list: cut(drawn, focus, Math.max(1, room - menu.length)) };
   }
 
-  /** The rows, styled: the menu, the box, the hint and the list. */
+  /** The queued lines' rows, dim, each cut to one row: `queued: <line>`. */
+  #queuedRows(): string[] {
+    const width = Math.max(1, this.#columns() - 2);
+    return this.#queued().map((line) => {
+      const shown = line.replaceAll("\n", "⏎").replaceAll("\t", "    ");
+      return `  ${style("2", fit(`queued: ${shown}`, width))}`;
+    });
+  }
+
+  /** The rows, styled: the queued lines, the menu, the box, the hint and the list. */
   lines(): string[] {
     const { rows, width } = this.#fold();
     const { start, end } = this.#window();
@@ -731,7 +757,7 @@ export class LineEditor {
       const label = (title === "" || room < 1 ? "" : `─ ${fit(title, room)} `) + more;
       return label + "─".repeat(Math.max(0, width + 4 - cells(label)));
     };
-    const { menu, list } = this.#around();
+    const { queued, menu, list } = this.#around();
     // Down moves the menu's highlight, not into the list, while the menu is open.
     const extra = list.length > 0 && menu.length === 0 ? this.list?.hint : undefined;
     const own = this.#hint();
@@ -739,6 +765,7 @@ export class LineEditor {
     // The list's hint only when it fits on the row: the box's hint matters more.
     const hint = cells(both) + 2 <= this.#columns() ? both : own;
     return [
+      ...queued,
       ...menu,
       border(`╭${edge(start, "↑", this.#title())}╮`),
       ...rows.slice(start, end).map((each, i) => {
@@ -757,7 +784,8 @@ export class LineEditor {
     if (this.focus() !== null) return null;
     const { rows, row } = this.#fold();
     const before = rows[row]!.chars.slice(0, this.#text.caret() - rows[row]!.start).join("");
-    const above = this.#around().menu.length;
+    const { queued, menu } = this.#around();
+    const above = queued.length + menu.length;
     return { row: above + row - this.#window().start + 1, before: `│ ${lead(row)}${before}` };
   }
 
@@ -781,6 +809,7 @@ export class LineEditor {
     if (key.paste) {
       this.#focus = null;
       this.#menu = false;
+      this.#leader = false;
       this.#text.key(key);
       return null;
     }
@@ -791,6 +820,9 @@ export class LineEditor {
     const count = list.length;
     const enter = key.name === "return" || key.name === "enter";
     const plain = !key.ctrl && !key.meta;
+    const leader = this.#leader;
+    this.#leader = focus === null && key.ctrl && key.name === "x";
+    if (this.#leader) return null;
     if (focus !== null) {
       if (enter) return { open: list[focus]!.key };
       if (key.name === "escape" || (plain && key.name === "up" && focus === 0)) this.#focus = null;
@@ -808,7 +840,9 @@ export class LineEditor {
       return null;
     }
     if (key.name === "escape") return { escape: true };
-    return this.#textKey(key);
+    if (plain && key.name === "up" && this.#fold().row === 0 && this.#queued().length > 0) return { recall: true };
+    const ended = this.#textKey(key);
+    return ended !== null && "value" in ended && enter && (key.meta || leader) ? { ...ended, queue: true } : ended;
   }
 
   /** Apply `key` to the text; a `/` typed into an empty box opens the menu. */
@@ -1136,7 +1170,8 @@ type Opened = { open: string };
  * `editor` as a prompt: once entered it collapses to `> <text>` on the user's band (`userRows`,
  * `columns()` wide, plain without `colour`) and the editor is emptied (`LineEditor.enter`); any
  * other ending erases it. With `keeps`, the box stays drawn under it. Escape ends it only with
- * `escape` (answering `ESCAPED`), and Enter on a list row answers `{open}`.
+ * `escape` (answering `ESCAPED`), and Enter on a list row answers `{open}`. No reply runs at a
+ * prompt, so a line queued is entered as any other, and a recall does nothing.
  */
 function editorWidget(
   editor: LineEditor,
@@ -1150,7 +1185,7 @@ function editorWidget(
     cursor: () => editor.cursor(),
     key(key) {
       const action = editor.key(key);
-      if (action === null) return undefined;
+      if (action === null || "recall" in action) return undefined;
       if ("escape" in action) return escape ? { value: ESCAPED } : undefined;
       if ("open" in action) return { value: action };
       return action;
@@ -1410,6 +1445,7 @@ export class Terminal {
     hint: string;
     list?: PromptList | null;
     commands?: readonly PromptCommand[];
+    queued?: () => readonly string[];
   }): LineEditor {
     const output = this.#output;
     const size = { columns: () => columnsOf(output), rows: () => rowsOf(output) };

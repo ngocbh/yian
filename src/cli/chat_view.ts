@@ -496,10 +496,12 @@ export class ChatView {
 
   /**
    * Print `line`, a line sent from the input box, as the prompt leaves one (`userRows`): `> <line>`
-   * on the user's gray band, wrapped at its spaces onto as many rows as it needs.
+   * on the user's gray band, wrapped at its spaces onto as many rows as it needs. With `turn`, the
+   * line starts a turn, so a blank line comes before it, as before a prompt.
    */
-  echo(line: string): void {
+  echo(line: string, turn = false): void {
     this.#batch(() => {
+      if (turn) this.#blankLine();
       this.#last = "other";
       const colour = this.#output.isTTY === true && !this.#env("NO_COLOR");
       this.#commit(userRows(sanitize(line).replaceAll("\n", "⏎"), this.#width(), colour));

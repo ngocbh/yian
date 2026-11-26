@@ -178,7 +178,7 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
       title = typeof value?.["title"] === "string" ? value["title"] : title;
       const transcript = value?.["transcript"] as { history?: unknown } | null | undefined;
       seeded = spokenCount(transcript?.history) || seeded;
-    } else if (record.key === "__start__.owner_messages") {
+    } else if (record.key === "__start__.owner_messages" || record.key === "__start__.queued") {
       const choice = chosenModel(value, CHAT_PERSON);
       if (choice !== null) chosen = choice;
       else if (value?.["author"] == null) {

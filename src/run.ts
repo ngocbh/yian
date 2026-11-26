@@ -2599,6 +2599,16 @@ export interface InterruptResult {
   readonly released: readonly string[];
 }
 
+/** The options of `interrupt`: `DeliveryOptions`, and whether its Stop stands. */
+export interface InterruptOptions extends DeliveryOptions {
+  /**
+   * Whether the Stop stands for an agent that opens the inbox soon (the default, `true`). With
+   * `false` only the agents reading it now are cut: the record leaves no Stop, and with none to cut
+   * nothing is appended, so a later turn, and a message another sender queued for it, go on.
+   */
+  standing?: boolean;
+}
+
 /**
  * Stop the turn on the top-level inbox `inbox`: interrupt the agents reading it as their steer
  * inbox, and remember the Stop for one that opens it soon. Each named agent's current reply is cut
@@ -2616,27 +2626,29 @@ export interface InterruptResult {
  * inline take commits, a withdraw reopens a take), the first `run_waiting` after it stopped an
  * agent, or run end: a reader that opens `inbox` meanwhile is stopped before its first model
  * call, and only its own `interrupted` record (carrying the Stop's `options.by`) and `CallClosed`
- * events report it. Delivered as
- * `send` is; offline only waiting agents are named, and a crashed run's agents stop when they
- * reopen.
+ * events report it. With `options.standing` false no Stop is remembered: only the agents reading
+ * `inbox` now are cut, and nothing is appended when none is. Delivered as `send` is; offline only
+ * waiting agents are named, and under a standing Stop a crashed run's agents stop when they reopen.
  *
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.
- * @param options See `DeliveryOptions`.
+ * @param options See `InterruptOptions`.
  * @returns The record's seq, the agents it named, and the open host calls and released calls it
  *   closed.
- * @throws TypeError when `inbox` isn't a string, `options.by` isn't an author or `null`, or
- *   `options.flow` isn't a `ComposedFlow` or `null`.
+ * @throws TypeError when `inbox` isn't a string, `options.by` isn't an author or `null`,
+ *   `options.standing` isn't a boolean, or `options.flow` isn't a `ComposedFlow` or `null`.
  * @throws RangeError when a field of `options.by` is empty.
  * @throws DeliveryRefused (nothing appended) with reason `ended` once the run has a terminal
  *   result, `not_started`, or `unknown_inbox`.
  * @throws RunBusyError, RangeError, LoadError, DefaultsMismatchError and `ENOENT`, as `send`.
  */
-export async function interrupt(log: string, inbox: string, options: DeliveryOptions = {}): Promise<InterruptResult> {
+export async function interrupt(log: string, inbox: string, options: InterruptOptions = {}): Promise<InterruptResult> {
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
+  const standing = options.standing ?? true;
+  if (typeof standing !== "boolean") throw new YianTypeError("standing must be a boolean");
   let open: readonly PendingCall[] = [];
   let released: string[] = [];
-  const { seq, events, record } = await deliverTo(log, { kind: "interrupt", inbox }, options, (state) => {
+  const { seq, events, record } = await deliverTo(log, { kind: "interrupt", inbox, standing }, options, (state) => {
     open = openHostCalls(state.waits, (call) => stateArguments(state, call));
     released = [...state.waits.calls.values()].filter((call) => call.state === "released").map((call) => call.callId);
   });

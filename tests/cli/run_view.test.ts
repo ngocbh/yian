@@ -459,10 +459,9 @@ describe("a run's view", () => {
       released: [],
       status: running,
       landed: true,
-      queued: 0,
       taken: taken.map((text, i) => ({ seq: i, by: null, value: { role: "user", parts: [{ type: "text", text }] } })),
     });
-    const answers = [cut(["turn/reply"], ["first", "second"]), cut([], []), { ...cut([], ["third"]), seq: null }];
+    const answers = [cut(["turn/reply"], ["first", "second"]), { ...cut([], ["third"]), seq: null }];
     const { view, presses, rows } = viewOf(running, ["notes"], () => ({ result: answers.shift()!, recorded: true, reason: null }));
     expect(rows().at(-1)).toBe("esc interrupts notes · ctrl-c goes back to the chat");
     view.key(typed("draft"));
@@ -471,16 +470,13 @@ describe("a run's view", () => {
     await settle();
     expect(rows().at(-6)).toBe("interrupted turn/reply; 2 messages back in the box");
     expect(rows().at(-4)).toBe(boxRow("> first second draft"));
-    view.key(ESC);
-    await settle();
-    expect(rows().at(-6)).toBe("nothing to stop now; the next turn on notes stops at once");
-    // With the run waiting on its take of the inbox, nothing stands.
+    // With no step reading the inbox now, nothing is cut.
     view.key(typed("x"));
     view.key(named("backspace"));
     view.key(ESC);
     await settle();
     const said = rows().slice(-7, -5).join(" ");
-    expect(said).toBe("nothing to interrupt: the run waits for a message on notes, or is already stopping; 1 message back in the box");
+    expect(said).toBe("nothing to interrupt on notes now: its next step runs; /stop ends it; 1 message back in the box");
   });
 
   test("Esc at rest goes back to the chat, pressing nothing, a prompt behind the view or not", () => {
@@ -566,7 +562,7 @@ describe("a run's view", () => {
   });
 
   test("Esc interrupts a run drawn running even with a prompt behind the view", async () => {
-    const cut: ChildInterrupt = { seq: 9, nodes: ["reply"], calls: [], released: [], status: running, landed: true, queued: 0, taken: [] };
+    const cut: ChildInterrupt = { seq: 9, nodes: ["reply"], calls: [], released: [], status: running, landed: true, taken: [] };
     const behind = viewOf(running, ["notes"], () => ({ result: cut, recorded: true, reason: null }));
     expect(behind.rows(24, true).at(-1)).toBe("the chat waits on you · ctrl-c to answer");
     expect(behind.view.key(ESC)).toBe(false);

@@ -343,11 +343,10 @@ child, so its log is `~/.yian/runs/<chat run id>-r<n>-r<m>/log.jsonl`; it report
 assistant too.
 
 When you ask the assistant to stop what a flow is doing, it interrupts the flow on an inbox: it
-takes back its own messages the flow hasn't read, then cuts the steps reading the inbox. When the
-flow waits for a message there, there is nothing to interrupt. When no step reads it, the interrupt
-stands until the flow next takes from the inbox, and a step that starts reading it before then
-stops at once, so a message someone else sent may go unanswered; the assistant is told how many
-are queued. The flow goes on; to end it, ask the assistant to stop it.
+takes back its own messages the flow hasn't read, then cuts the steps reading the inbox now. When
+no step reads it, as when the flow waits for a message there, there is nothing to interrupt, and
+the flow's next step runs as it would have. The flow goes on; to end it, ask the assistant to stop
+it.
 
 ### A flow's view
 
@@ -371,7 +370,7 @@ place of the box.
 | Enter on a held call | Shows the whole call on a card in place of the box: what it acts on, as its tool tells the check, else its arguments, then your reason, the box's text. `a` approves it and `r` refuses it; any other key leaves it held. A card too big for the screen approves nothing, nor does an `a` typed just after Esc or a resize. A host that gates its runs shows held calls here; `yian chat` doesn't |
 | `/close` | Closes the inbox picked once you press `y`: the flow reads no more from it |
 | `/stop` | Stops the flow once you press `y`: its run ends |
-| Esc while the flow runs | Interrupts it on the inbox picked: takes back your messages it hasn't read, which return to the box, then cuts the steps reading the inbox. When the flow waits for a message there, there is nothing to interrupt. When no step reads it, the interrupt stands until the flow next takes from the inbox, and a step that starts reading it before then stops at once |
+| Esc while the flow runs | Interrupts it on the inbox picked: takes back your messages it hasn't read, which return to the box, then cuts the steps reading the inbox now. When no step reads it, there is nothing to interrupt |
 | Esc at rest, or Ctrl-C | Goes back to the chat |
 
 Keys in the view reach only the flow: Esc there never stops the assistant's reply. While an

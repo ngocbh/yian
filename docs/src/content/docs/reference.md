@@ -274,7 +274,7 @@ compact JSON with its keys sorted:
 | `node_failed` | A node failed, with its failure. The run is over, unless the node is inside an AGENT's flow call (`call_id`, `scope`): that call fails and its scope's other nodes end |
 | `inbox_closed` | An inbox was closed; it takes no more messages |
 | `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox; `events` lists them. With `by`, they were sent with that `by`. `chosen: true` when the host named them, else they were all the unread ones |
-| `interrupted` | The agents reading an inbox were interrupted |
+| `interrupted` | The agents reading an inbox were interrupted. `standing: false` when it left no Stop for an agent that opens the inbox later |
 
 A record a host call made holds `by` when the call passed one: who made it, as
 `{kind, name, run?, node?}`, its kind `user` (a person), `agent`, `tool`, `host` or `run`. These are

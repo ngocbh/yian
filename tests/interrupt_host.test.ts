@@ -830,3 +830,116 @@ test("a resumable call a crash cut off is sent again with ctx.interrupted aborte
   expect(stepKinds(log, "reply")).toEqual(["model_call", "tool_result", "interrupted"]);
   expect(stepsOf(log, "reply")[1]).toMatchObject({ call_id: "c1", output: "stopped" });
 });
+
+// --- An interrupt that cuts only the readers open now (`standing: false`) --------------------- //
+
+/** A person, and an agent that shares the inbox with them. */
+const ADA = { kind: "user", name: "Ada" } as const;
+const BOSS = { kind: "agent", name: "boss", run: "owner-1" } as const;
+
+/** `heard`, then `reply1` (a reader), then `reply2` (a reader) at once, with no wait between them. */
+const BACK_TO_BACK = `
+id: back_to_back
+name: back_to_back
+llm_config: {provider: openai, model: test-model}
+input:
+  m: !Inbox(str)
+nodes:
+  heard:
+    kind: call
+    call: take
+    input:
+      from: \${input.m}
+      take: one
+  reply1:
+    kind: agent
+    prompt: "answer \${got}"
+    steer_inbox: \${input.m}
+    input:
+      got: \${heard.output.events}
+    output: !Optional(str)
+  reply2:
+    kind: agent
+    prompt: 'go on \${first :- "-"}'
+    steer_inbox: \${input.m}
+    input:
+      first: \${reply1.output}
+    output: !Optional(str)
+output: \${reply2.output}
+`;
+
+test.each([
+  ["the take holds another sender's message it hasn't woken for", TAKE_REPLY, false],
+  ["a mid-turn ask waits, so no reader is open", gateFlow(ASK_GATE), true],
+])("standing: false with no reader open appends nothing: %s, and the turn answers it", async (_, text, asks) => {
+  const model = new ScriptedModel([textReply("the answer")], CONFIG);
+  const log = freshLog();
+  const options = { env, log, models: serving(model), runId: "r", tools: { ask: () => pending() } };
+  expect((await runFlow(await loadFlow(text), {}, options)).status).toBe("waiting");
+  await send(log, "m", "from Ada", { env, by: ADA });
+  if (asks) expect((await advance(options)).status).toBe("waiting");
+  const before = readFileSync(log);
+  expect(await interrupt(log, "m", { env, by: BOSS, standing: false })).toEqual({ seq: null, nodes: [], calls: [], released: [] });
+  expect(readFileSync(log).equals(before)).toBe(true);
+  if (asks) await complete(log, pendingCalls(log)[0]!.callId, { output: "yes" }, { env });
+  const done = await advance(options);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBe("the answer");
+  expect(stopsAt(log)).toEqual([]);
+  expect(JSON.stringify(model.requests[0]!.messages.map((message) => message.toJSON()))).toContain("from Ada");
+});
+
+test("standing: false cuts a waiting reader as the default does, and leaves no Stop", async () => {
+  const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
+  const { log, options } = await waitingReply(model);
+  const [call] = pendingCalls(log);
+  const cut = await interrupt(log, "m", { env, by: BOSS, standing: false });
+  expect(cut).toEqual({ seq: readRunLog(log).at(-1)!.seq, nodes: ["reply"], calls: [call!], released: [] });
+  expect(readRunLog(log).at(-1)!.record).toEqual(new InterruptedRecord("m", ["reply"], { by: BOSS, standing: false }));
+  expect(foldedWaits(log).stops.size).toBe(0);
+  const done = await advance(options);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(done.output).toBeNull();
+  expect(stepKinds(log, "reply").slice(-2)).toEqual(["tool_result", "interrupted"]);
+});
+
+test("standing: false cuts the running reader live, and the reader after it in the same turn answers in full", async () => {
+  // The default's Stop would stand until the run waits, so it would stop reply2 before its model call.
+  const model = new ScriptedModel([CHUNKS(), textReply("second reply")], CONFIG);
+  const { log, options } = await heardHi(BACK_TO_BACK, model, { numWorkers: 0 });
+  let cut: Promise<unknown> | null = null;
+  const onStream = (chunk: StreamChunk) => {
+    if (chunk.nodeId === "reply1" && chunk.chunk === "one") cut = interrupt(log, "m", { env, standing: false });
+  };
+  const done = await advance({ ...options, onStream });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  expect(await cut!).toMatchObject({ nodes: ["reply1"] });
+  expect(done.output).toBe("second reply");
+  expect(stopsAt(log)).toEqual([["reply1"]]);
+  expect(stepKinds(log, "reply1").at(-1)).toBe("interrupted");
+  expect(stepKinds(log, "reply2")).toEqual(["model_call"]);
+});
+
+test("standing: false on a crashed run with only a reader in flight appends nothing, and the reader carries on", async () => {
+  const flow = await loadFlow(replyFlow());
+  const script = () => new ScriptedModel([callReply(["lookup", {}, "c1"]), textReply("done")], CONFIG);
+  const whole = freshLog();
+  await runFlow(flow, {}, { env, log: whole, tools: tools(), models: serving(script()), runId: "r" });
+  const log = freshLog();
+  await crashAfter(kinds(whole).indexOf("model_call") + 1, () =>
+    runFlow(flow, {}, { env, log, tools: tools(), models: serving(script()), runId: "r" }),
+  );
+  const before = readFileSync(log);
+  expect(await interrupt(log, "m", { env, standing: false })).toEqual({ seq: null, nodes: [], calls: [], released: [] });
+  expect(readFileSync(log).equals(before)).toBe(true);
+  const done = await advance({ env, log, tools: tools(), models: serving(new ScriptedModel([textReply("done")], CONFIG)) });
+  expect([done.status, done.output]).toEqual(["succeeded", "done"]);
+});
+
+test("standing must be a boolean", async () => {
+  const model = new ScriptedModel([callReply(["hold", {}, "c1"])], CONFIG);
+  const { log } = await waitingReply(model);
+  const refused = await rejected(interrupt(log, "m", { env, standing: "no" as never }));
+  expect([refused instanceof TypeError, (refused as Error).message]).toEqual([true, "standing must be a boolean"]);
+  expect(kinds(log).at(-1)).not.toBe("interrupted");
+});

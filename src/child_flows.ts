@@ -388,11 +388,6 @@ export interface ChildInterrupt extends InterruptResult {
    * fault stopped it after the take-back), the status's `note` says why, and the rest is empty.
    */
   readonly landed: boolean;
-  /**
-   * When it named no agent but left a Stop for the next one to read the inbox: the unread sends to
-   * the inbox from others than the caller, which that agent's turn may use up unanswered; else 0.
-   */
-  readonly queued: number;
 }
 
 /** The tools of an owner's group a person may press (`ChildFlowOwner.press`), each with its arguments. */
@@ -1573,15 +1568,15 @@ export class ChildFlows {
   }
 
   /**
-   * Interrupt child `id`'s inbox `inbox`, as `interrupt` does: the agents reading it as their steer
-   * inbox stop their current step, and their open calls and released calls not yet run are closed;
-   * the run goes on (`stop` ends it). With no agent reading it now, the next one to read it stops at
-   * once, though it may already have taken another sender's message, which then goes unanswered
-   * (`queued`). First, so the cut agents never read them, take back the unread sends to `inbox`
-   * that `options.from` made: never anyone else's, so none without it, as the host's own sends
-   * are recorded as no one's. Returns its status, as `answer` does, with the sends taken back and
-   * the interrupt's result (`landed` says whether it happened). When the take-back landed but the
-   * interrupt then fails, the fault is the status's note, so what came back is still returned.
+   * Interrupt child `id`'s inbox `inbox`, as `interrupt` with `standing: false` does: the agents
+   * reading it as their steer inbox now stop their current step, and their open calls and released
+   * calls not yet run are closed; the run goes on (`stop` ends it). With no agent reading it now,
+   * nothing is cut, and its next step runs as it would have. First, so the cut agents never read
+   * them, take back the unread sends to `inbox` that `options.from` made: never anyone else's, so
+   * none without it, as the host's own sends are recorded as no one's. Returns its status, as
+   * `answer` does, with the sends taken back and the interrupt's result (`landed` says whether it
+   * happened). When the take-back landed but the interrupt then fails, the fault is the status's
+   * note, so what came back is still returned.
    *
    * @throws {RangeError} When no child has the id.
    * @throws What a delivery fault throws, as `answer` says, when nothing was taken back.
@@ -1591,14 +1586,15 @@ export class ChildFlows {
     const by = options.from?.by ?? null;
     let taken: readonly WithdrawnEvent[] = [];
     let cut = null as InterruptResult | null;
-    const none = { seq: null, nodes: [], calls: [], released: [], queued: 0, landed: false };
+    const none = { seq: null, nodes: [], calls: [], released: [], landed: false };
     let status: ChildStatus;
     try {
       status = await this.#deliver(
         child,
         async (log, delivery) => {
           if (by !== null) taken = await withdraw(log, inbox, delivery);
-          cut = await interrupt(log, inbox, delivery);
+          // A Stop left standing would stop a later turn, which may have taken another sender's message.
+          cut = await interrupt(log, inbox, { ...delivery, standing: false });
           return taken.length > 0 || cut.seq !== null;
         },
         options,
@@ -1614,19 +1610,7 @@ export class ChildFlows {
       if (taken.length > 0) this.nudge(id);
       return { ...none, taken, status };
     }
-    // A Stop left standing: the next reader may take these before it stops.
-    let queued = 0;
-    if (cut.seq !== null && cut.nodes.length === 0) {
-      try {
-        const unread = inspectRun(child.log).unread;
-        queued = unread.filter((send) => send.inbox === inbox && !isDeepStrictEqual(send.by, by)).length;
-      } catch (error) {
-        // The interrupt landed, so a fault counting them is only a note.
-        const scrubbed = this.#options.memories.scrub(error, child.memory);
-        status = { ...status, note: (scrubbed as Error | null)?.message ?? String(scrubbed) };
-      }
-    }
-    return { ...cut, landed: true, queued, status, taken };
+    return { ...cut, landed: true, status, taken };
   }
 
   /**
@@ -2912,18 +2896,15 @@ function pressedInterrupt(done: ChildInterrupt): string {
   return done.seq === null ? `nothing to interrupt (${took})` : `interrupted (${took})`;
 }
 
-/** What `done`, an interrupt of `inbox`, did, in a line the model reads. */
-function interruptText(inbox: string, done: ChildInterrupt): string {
+/** What `done`, an interrupt of `inbox`, did, in a line the model reads; `group` names its tools. */
+function interruptText(group: string, inbox: string, done: ChildInterrupt): string {
   const count = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
   const taken = done.taken.length;
   const took = `took back ${count(taken, "message")}${taken > LIST_ITEMS ? `, the first ${LIST_ITEMS} shown` : ""}`;
   if (!done.landed) return `not interrupted (${took})`;
   if (done.seq === null) {
-    return `nothing to interrupt: the run waits for a message on inbox '${inbox}', or is already stopping (${took})`;
-  }
-  if (done.nodes.length === 0) {
-    const queued = `, and may use up ${count(done.queued, "queued message")} from others unanswered`;
-    return `nothing to stop now; the next turn on '${inbox}' stops at once${done.queued === 0 ? "" : queued} (${took})`;
+    const next = `its next step runs; ${group}_stop ends it`;
+    return `nothing to interrupt: the run has no step reading inbox '${inbox}' now, or is already stopping; ${next} (${took})`;
   }
   const held = done.calls.filter((call) => call.held).length;
   const closed = [
@@ -3077,17 +3058,18 @@ export function childFlows<T extends ChildFlowTarget>(
       name: "interrupt",
       description:
         "Stop what a run you started is doing on one of its Inbox inputs: first take back your messages " +
-        "there that the run hasn't read, then cut the current step of its agents reading that inbox, " +
-        "closing their questions and held calls. The run goes on, and waits for its next message; to " +
-        "end it, cancel it. Returns its status with interrupted (what it did) and taken_back (the " +
-        `messages taken back, which the run never reads; send again what still applies). ${status}`,
+        "there that the run hasn't read, then cut the current step of its agents reading that inbox " +
+        "now, closing their questions and held calls; with none reading it, nothing is cut. Either way " +
+        "the run goes on to its next step; to end it, stop it. Returns its status with interrupted " +
+        "(what it did) and taken_back (the messages taken back, which the run never reads; send again " +
+        `what still applies). ${status}`,
       parameters: runArguments(["inbox", "The Inbox input's name."]),
       execute: async (args, ctx) => {
         const id = known(args);
         const inbox = stringArg(args, "inbox");
         const done = await owner.interrupt(id, inbox);
         const taken = done.taken.slice(0, LIST_ITEMS).map((send) => sentText(send.value));
-        return { ...show(done.status, ctx), interrupted: interruptText(inbox, done), taken_back: taken };
+        return { ...show(done.status, ctx), interrupted: interruptText(owner.group, inbox, done), taken_back: taken };
       },
     }),
     tool({

@@ -165,8 +165,8 @@ export class WaitsState {
   /** Pending interrupts by node: the seq of the `interrupted` record each named node hasn't honored yet. */
   readonly interrupts = new Map<string, number>();
   /**
-   * The remembered Stop by inbox: set by an `interrupted` record, ended by the next pickup from
-   * the inbox (a take of it waits, a waiting take is answered or times out, an inline take
+   * The remembered Stop by inbox: set by a standing `interrupted` record, ended by the next pickup
+   * from the inbox (a take of it waits, a waiting take is answered or times out, an inline take
    * commits, a withdraw reopens a take), by the first `run_waiting` once it has stopped an agent,
    * or by run end. A steer reader that opens the inbox while it stands is stopped.
    */
@@ -681,12 +681,14 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
 /**
  * Apply `interrupted`: each named node holds a pending interrupt, and its open calls close
  * `interrupted`, a waiting node's released calls too; the scope of each of its open flow calls
- * ends.
+ * ends. A standing record remembers the Stop on its inbox; one that isn't leaves the stops alone.
  */
 function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
-  // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
-  const stopped = (w.stops.get(record.inbox)?.stopped ?? false) || record.nodes.length > 0;
-  w.stops.set(record.inbox, { seq, stopped, by: record.by });
+  if (record.standing) {
+    // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
+    const stopped = (w.stops.get(record.inbox)?.stopped ?? false) || record.nodes.length > 0;
+    w.stops.set(record.inbox, { seq, stopped, by: record.by });
+  }
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
     w._interruptInboxes.set(nodeId, record.inbox);

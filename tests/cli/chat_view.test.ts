@@ -2287,7 +2287,7 @@ describe("a run's view presses the assistant's tools as the user", () => {
       stdin.write("\x1b[Z");
       await until(() => rows().at(-1) === "esc interrupts notes · ctrl-c goes back to the chat");
       stdin.write(ESCAPE);
-      const said = "nothing to interrupt: the run waits for a message on notes, or is already stopping";
+      const said = "nothing to interrupt on notes now: its next step runs; /stop ends it";
       await until(() => rows().slice(-8, -5).join(" ").includes(said));
       expect(records(log).filter((record) => record instanceof InterruptedRecord)).toEqual([]);
       expect(actions().map((action) => action.parts[0]!.result)).toEqual(["sent", "nothing to interrupt (took back 0 messages)"]);

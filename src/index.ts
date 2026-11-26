@@ -16,9 +16,9 @@
  *   `TransientToolError` and `ReportedToolError` (`tools/errors`), and `ToolAttemptsFailed`
  *   (`nodes/tool/node`);
  * - the host calls on a run log, `send`, `withdraw` (with `WithdrawOptions`, `Withdrawal` and
- *   `WithdrawnEvent`), `complete`, `release` (with `ReleaseOptions`), `close`, `interrupt`,
- *   `cancel` and `pendingCalls`, their `DeliveryOptions`, and their errors `RunBusyError` and
- *   `DeliveryRefused` (`run`);
+ *   `WithdrawnEvent`), `complete`, `release` (with `ReleaseOptions`), `close`, `interrupt` (with
+ *   `InterruptOptions`), `cancel` and `pendingCalls`, their `DeliveryOptions`, and their errors
+ *   `RunBusyError` and `DeliveryRefused` (`run`);
  * - memory: `MemoryBase`, `isMemory`, the session's errors `MemoryBusyError`,
  *   `ChangeIdReusedError` and `MemoryMissingError`, `memoryErrorKind`, and the contract and
  *   session types (`memory/base`); `FileMemory` and `FileMemoryOptions` (`memory/file`);
@@ -84,6 +84,7 @@ export {
   type DeliveryOptions,
   DeliveryRefused,
   interrupt,
+  type InterruptOptions,
   pendingCalls,
   release,
   type ReleaseOptions,

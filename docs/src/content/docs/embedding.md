@@ -253,7 +253,8 @@ Your program reaches a waiting run by its log path:
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
 | `complete(log, callId, result)` | the seq, or `null` for the same answer twice by the same `by` | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one. The same answer by another `by` is refused `call_settled` |
 | `release(log, callId, { note })` | the seq, or `null` if released before by the same `by` | Runs a held call (see [Gate tool calls](#gate-tool-calls)). A release after one by another `by` is refused `call_settled` |
-| `interrupt(log, inbox)` | `{seq, nodes, calls}` | Stops the agents steered by that inbox |
+| `interrupt(log, inbox)` | `{seq, nodes, calls, released}` | Stops the agents steered by that inbox |
+| `interrupt(log, inbox, { standing: false })` | `{seq, nodes, calls, released}` | Stops only the agents steered by that inbox now; none that starts later |
 | `cancel(log)` | the open host calls it closed | Ends the run as `cancelled` |
 | `pendingCalls(log)` | `PendingCall[]` | Lists open host calls; reads without the lock |
 
@@ -423,6 +424,12 @@ calls that hadn't run are closed too (`released`). A running tool call learns of
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.
+
+With `standing: false`, `interrupt` stops only the agents reading the inbox now. An agent that
+starts reading it later isn't stopped, and with none reading it, nothing is appended. When your
+process isn't running the run, only waiting agents count: an agent a crash or a stop left mid-step
+isn't stopped when the run resumes. Use it when others share the inbox: otherwise a turn that has
+already taken another sender's message could be stopped before it answers.
 
 `cancel` ends the run with no output, and closes its open calls. If your process
 is running the run, its running nodes are stopped at once. Otherwise `cancel` reads only the
@@ -666,20 +673,17 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   1. It takes back the model's own unread sends to that inbox (`withdraw` with the owner's
      `by`), never anyone else's. `by` names no node, so two agents of one owner run take back
      each other's sends.
-  2. It [interrupts](#interrupt-and-cancel) the inbox: the agents reading it as their steer inbox
-     stop their current step, and their open calls close, held calls and released calls not yet
-     run among them. The run goes on; `stop` ends it. With no agent reading it now, the next turn
-     on the inbox stops at once, and may use up a message another sender queued without
-     answering it.
+  2. It [interrupts](#interrupt-and-cancel) the inbox with `standing: false`: the agents reading
+     it as their steer inbox now stop their current step, and their open calls close, held calls
+     and released calls not yet run among them. The run goes on; `stop` ends it. With no agent
+     reading it now, nothing is cut, and the run's next step runs as it would have.
 
-  The status adds `interrupted`, what it did (`interrupted (took back 1 message)`), with how
-  many queued messages from others that next turn may use up, and `taken_back`, the first 20
-  texts taken back, each cut at 4000 characters with a note. When the take-back lands and the
-  interrupt then fails, the status's `note` says why, and what came back is still listed. The
-  driver's own `interrupt` returns a `ChildInterrupt`: the status, the sends taken back
-  (`taken`), whether the interrupt happened (`landed`), the queued count (`queued`) and
-  `interrupt`'s result. Without a sender it takes back nothing, since the host's own sends are
-  no one's.
+  The status adds `interrupted`, what it did (`interrupted (took back 1 message)`), and
+  `taken_back`, the first 20 texts taken back, each cut at 4000 characters with a note. When the
+  take-back lands and the interrupt then fails, the status's `note` says why, and what came back
+  is still listed. The driver's own `interrupt` returns a `ChildInterrupt`: the status, the sends
+  taken back (`taken`), whether the interrupt happened (`landed`) and `interrupt`'s result.
+  Without a sender it takes back nothing, since the host's own sends are no one's.
 - **Start.** With the `start` option the group has `<group>_start` too, which takes `flow`, `inputs`
   and `content` (a draft's text). In order:
   1. `resolve` finds the flow the call names. Throw a `ReportedToolError` for one it may not start,

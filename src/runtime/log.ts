@@ -855,9 +855,9 @@ export class InboxWithdrawnRecord {
 
 /**
  * Interrupt the agents reading an inbox as their steer inbox: each named node's open calls close
- * with reason `interrupted`, and it holds a pending interrupt until it honors it or settles. With
- * no node named, it only records the Stop, which a reader opening the inbox later honors.
- * Frozen.
+ * with reason `interrupted`, and it holds a pending interrupt until it honors it or settles. It
+ * also records a Stop, which a reader opening the inbox later honors, unless it is `standing:
+ * false`; with no node named, it only records the Stop. Frozen.
  */
 export class InterruptedRecord {
   /** The steer inbox the interrupt arrived on; non-empty. */
@@ -872,16 +872,26 @@ export class InterruptedRecord {
    * standing Stop copies that Stop's. `null` when it said no one.
    */
   readonly by: Author | null;
+  /**
+   * Whether it records a Stop for a reader that opens the inbox later; `false` when it cut only the
+   * agents reading the inbox as it was made, which it then names at least one of.
+   */
+  readonly standing: boolean;
 
   /**
-   * @throws TypeError when `inbox` isn't a string, or `by` isn't an author or null.
-   * @throws RangeError when `inbox` or a field of `by` is empty, or `nodes` isn't an array of
-   *   unique non-empty strings.
+   * @throws TypeError when `inbox` isn't a string, `by` isn't an author or null, or `standing`
+   *   isn't a boolean.
+   * @throws RangeError when `inbox` or a field of `by` is empty, `nodes` isn't an array of unique
+   *   non-empty strings, or it is empty and `standing` is false.
    */
-  constructor(inbox: string, nodes: readonly string[], options: { by?: Author | null } = {}) {
+  constructor(inbox: string, nodes: readonly string[], options: { by?: Author | null; standing?: boolean } = {}) {
     this.inbox = requireName(inbox, "inbox");
     this.nodes = validatedIdArray(nodes, "nodes");
     this.by = validatedBy(options.by, "by");
+    const standing = options.standing ?? true;
+    if (typeof standing !== "boolean") throw new YianTypeError("standing must be a boolean");
+    if (!standing && this.nodes.length === 0) throw new YianRangeError("nodes must be non-empty when standing is false");
+    this.standing = standing;
     Object.freeze(this);
   }
 }
@@ -3476,11 +3486,21 @@ const RECORD_CODECS: readonly RecordCodec[] = [
   recordCodec({
     cls: InterruptedRecord,
     kind: "interrupted",
-    encode: (record) => ({ inbox: record.inbox, nodes: [...record.nodes], ...byPayload(record.by) }),
+    encode: (record) => ({
+      inbox: record.inbox,
+      nodes: [...record.nodes],
+      ...byPayload(record.by),
+      ...(record.standing ? {} : { standing: false }),
+    }),
     decode: (payload, label) => {
-      requireFields(payload, presentFields(payload, ["inbox", "nodes"], ["by"]), label);
+      requireFields(payload, presentFields(payload, ["inbox", "nodes"], ["by", "standing"]), label);
+      const standing = !Object.hasOwn(payload, "standing") || wireBool(payload["standing"], `${label} standing`);
+      if (Object.hasOwn(payload, "standing") && standing) {
+        throw new YianRangeError(`${label} standing must be false; a Stop that stands leaves it out`);
+      }
       return new InterruptedRecord(requireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`), {
         by: byFromPayload(payload, label),
+        standing,
       });
     },
   }),

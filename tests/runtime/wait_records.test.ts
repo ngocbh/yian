@@ -133,6 +133,13 @@ test("inbox_withdrawn holds an inbox, its strictly increasing, non-empty send se
   expectError(() => new InboxWithdrawnRecord("msgs", [1.5]), RangeError, "events must be positive integers");
 });
 
+test("interrupted says whether it leaves a Stop: it does unless standing is false", () => {
+  expect(new InterruptedRecord("m", []).standing).toBe(true);
+  expect(new InterruptedRecord("m", ["reply"], { standing: false }).standing).toBe(false);
+  expectError(() => new InterruptedRecord("m", [], { standing: 0 as never }), TypeError, "standing must be a boolean");
+  expectError(() => new InterruptedRecord("m", [], { standing: false }), RangeError, "nodes must be non-empty when standing is false");
+});
+
 test("node_woken, run_waiting, inbox_closed, run_cancelled and run_failed", () => {
   expect(new NodeWokenRecord("heard").timedOut).toEqual([]);
   expect(Object.isFrozen(new NodeWokenRecord("nap", ["r/nap"]).timedOut)).toBe(true);
@@ -185,6 +192,11 @@ test.each([
   ["inbox_withdrawn", new InboxWithdrawnRecord("msgs", [5], { chosen: true }), { inbox: "msgs", events: [5n], chosen: true }],
   ["interrupted", new InterruptedRecord("owner", ["turn#0/reply", "side"]), { inbox: "owner", nodes: ["turn#0/reply", "side"] }],
   ["interrupted", new InterruptedRecord("owner", []), { inbox: "owner", nodes: [] }],
+  [
+    "interrupted",
+    new InterruptedRecord("owner", ["reply"], { standing: false }),
+    { inbox: "owner", nodes: ["reply"], standing: false },
+  ],
   ["run_cancelled", new RunCancelledRecord(), {}],
   ["run_failed", new RunFailedRecord(FAILURE), { failure: FAILURE.toJSON() }],
 ])("%s round trips under its wire kind", (kind, record, payload) => {
@@ -237,6 +249,21 @@ test.each<[string, string, Record<string, unknown>, typeof TypeError | typeof Ra
     "inbox_withdrawn payload chosen must be true; a withdraw of every unread send leaves it out",
   ],
   ["a text chosen", "inbox_withdrawn", { inbox: "msgs", events: [3n], chosen: "yes" }, TypeError, "inbox_withdrawn payload chosen must be a boolean"],
+  [
+    "standing: true",
+    "interrupted",
+    { inbox: "m", nodes: ["reply"], standing: true },
+    RangeError,
+    "interrupted payload standing must be false; a Stop that stands leaves it out",
+  ],
+  ["a text standing", "interrupted", { inbox: "m", nodes: ["reply"], standing: "no" }, TypeError, "interrupted payload standing must be a boolean"],
+  [
+    "standing: false naming no node",
+    "interrupted",
+    { inbox: "m", nodes: [], standing: false },
+    RangeError,
+    "nodes must be non-empty when standing is false",
+  ],
 ])("decode refuses %s", (_name, kind, payload, cls, message) => {
   expectError(() => decodeRecord(line(kind, payload)), cls, message);
 });

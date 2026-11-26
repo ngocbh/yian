@@ -192,9 +192,10 @@ function defaultParts(value: unknown, onDrop: (part: number) => void): Part[] {
  * turned into text and media dropped (`onDrop(event, part)` hears each drop); each run of other
  * events as one user message with a text part per event (a `str` as is, anything else in its text
  * form, `writeAsText`). A `Message` left with no part holds its event's text form. With a render,
- * each run of events between actions is one user message with one text part per event,
- * `render(event)`, other `Message` events included; an event whose render throws gets its default
- * rendering's parts there instead (`onFallback(event, error)` hears it). An action
+ * an event's part is `render(event)`, or its default rendering's parts when the render throws
+ * (`onFallback(event, error)` hears it). A `Message` event with an author is still a user message
+ * of its own keeping that author, so the adapter labels it as it labels an unrendered one; each run
+ * of the other events is one user message, `Message` events without an author included. An action
  * (`isActionMessage`) skips the render and keeps its own message and author, so it stays signed.
  * Never throws: the events are already consumed when it runs.
  */
@@ -208,22 +209,28 @@ export function steerMessages(values: readonly unknown[], options: SteerMessageO
   };
   values.forEach((value, event) => {
     const message = typeof value === "string" ? null : asMessage(value);
+    const drop = (part: number) => onDrop(event, part);
+    let parts: Part[];
     if (render !== null && !(message !== null && isActionMessage(message))) {
       try {
-        run.push(new TextPart(render(value)));
+        parts = [new TextPart(render(value))];
       } catch (error) {
         onFallback(event, error);
-        run.push(...defaultParts(value, (part) => onDrop(event, part)));
+        parts = defaultParts(value, drop);
       }
-      return;
-    }
-    if (message === null) {
+      // The render shapes the text, not who sent it: only an event with no author joins the run.
+      if (!message?.author) {
+        run.push(...parts);
+        return;
+      }
+    } else if (message === null) {
       run.push(new TextPart(writeAsText(value as Value)));
       return;
+    } else {
+      parts = defaultParts(value, drop);
     }
     flush();
     // An empty author can't be sent; the message goes without it.
-    const parts = defaultParts(value, (part) => onDrop(event, part));
     messages.push(new ModelMessage({ role: "user", parts, author: message.author || null }));
   });
   flush();

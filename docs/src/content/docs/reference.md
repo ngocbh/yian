@@ -243,12 +243,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":37,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":38,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `37`. yian reads only this one. A log of schema 10 to 36 reads as `run log schema N predates schema 37 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `38`. yian reads only this one. A log of schema 10 to 37 reads as `run log schema N predates schema 38 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |

@@ -350,5 +350,6 @@ status: waiting
   interrupt stops it) and `wake_at` (its earliest deadline). A run is due for `--resume` once
   `wake_at` has passed, though `ready` stays `false`.
 
-A run whose process dies resumes the same way: nodes that started and didn't finish run again.
+A run whose process dies resumes the same way: nodes that started and didn't finish run again,
+before any waiting node wakes.
 [How yian works](/how-it-works/) explains how the log makes this safe.

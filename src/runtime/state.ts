@@ -1824,6 +1824,15 @@ function retried(state: RunState, nodeId: string): boolean {
   return !state.inFlight.has(nodeId) && state.nodeStarts.has(nodeId) && state.ready.includes(nodeId);
 }
 
+/**
+ * Whether the head of `state.ready` is a node a resume put back (`retried`). A resume puts them
+ * ahead of the rest, in the order they started.
+ */
+export function retryIsNext(state: RunState): boolean {
+  const head = state.ready[0];
+  return head !== undefined && retried(state, head);
+}
+
 /** How a settled call's state reads in a message: `closed (<reason>)`, `answered`, `timed out` or `released`. */
 function settledText(call: Call): string {
   if (call.state === "closed") return `closed (${call.closedReason})`;

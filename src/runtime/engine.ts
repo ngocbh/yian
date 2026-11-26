@@ -114,6 +114,7 @@ import {
   inboxElementType,
   requireExpansionOutput,
   resolveFromPool,
+  retryIsNext,
   stepsWithSteerValues,
   ungrownFlowCalls,
 } from "./state.ts";
@@ -561,7 +562,9 @@ export class FlowEngine {
     try {
       while (state.result === null) {
         signal.throwIfAborted();
-        const woken = this.#nextWake();
+        // A resume's retries were running before any node now waking, so they go first, as they
+        // would have without the crash.
+        const woken = retryIsNext(state) ? null : this.#nextWake();
         let nodeId: string;
         if (woken !== null) {
           nodeId = woken.nodeId;
@@ -624,12 +627,25 @@ export class FlowEngine {
       );
       active.set(nodeId, worker);
     };
+    const startReady = (): void => {
+      // A callback failing during the previous node's synchronous start stops the run.
+      signal.throwIfAborted();
+      const nodeId = state.ready[0]!;
+      const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+      // The start is durable and published before its worker starts.
+      this.#publish(started, events);
+      signal.throwIfAborted();
+      startWorker(nodeId);
+    };
     try {
       while (state.result === null) {
         signal.throwIfAborted();
+        // A resume's retries held their workers before any node now waking, so they start first,
+        // and nothing wakes while one waits for a worker.
+        while (retryIsNext(state) && active.size - wakes.size < this.numWorkers) startReady();
         // Whether a wakeable node waits for a worker slot; then waking stops for this turn.
-        let blocked = false;
-        for (let woken = this.#nextWake(); woken !== null; woken = this.#nextWake()) {
+        let blocked = retryIsNext(state);
+        for (let woken = blocked ? null : this.#nextWake(); woken !== null; woken = this.#nextWake()) {
           const { nodeId } = woken;
           const free = state.flow.nodes.get(nodeId)!.wakesWithoutWorker;
           // A woken agent calls a model, so it takes a slot as a start does; waking stays oldest first.
@@ -642,16 +658,7 @@ export class FlowEngine {
           startWorker(nodeId);
           if (free) wakes.add(nodeId);
         }
-        while (state.ready.length > 0 && active.size - wakes.size < this.numWorkers) {
-          // A callback failing during the previous node's synchronous start stops the run.
-          signal.throwIfAborted();
-          const nodeId = state.ready[0]!;
-          const started = commitPrepared(log, state, prepareNodeStarted(state, nodeId));
-          // The start is durable and published before its worker starts.
-          this.#publish(started, events);
-          signal.throwIfAborted();
-          startWorker(nodeId);
-        }
+        while (state.ready.length > 0 && active.size - wakes.size < this.numWorkers) startReady();
         if (active.size === 0) {
           if (this.#quiesceEnds(events)) break;
           continue;

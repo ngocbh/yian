@@ -590,12 +590,13 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
     `start` to give it one of your own, such as an instrument's name (`shell 1`).
   - A label reads as it looks: one holding a control, format or invisible character, or
     whitespace at an end, doubled or other than a space, is refused. Labels are compared after
-    NFKC normalization and case folding, so `ＡＤＡ` reads as `Ada`.
+    NFKC normalization and case folding, so `ＡＤＡ` reads as `Ada`, and by their skeletons in
+    Unicode's confusables (UTS #39, version 18.0.0) as written, case-folded and upper-cased, so
+    `уіаn-сhаt` in Cyrillic reads as `yian-chat` and `ΚΙΜ` in Greek as `Kim`.
   - No label may read as `yian` or `office`, a relay (the word `via`), or a child's (ending in
     `r<n>`). No person may read as the owner or another person. A label you give a child also may
     not read as its owner's, a person's, a label above it in the tree, or a sibling's that still
     runs. An owner of a run the driver started has that run's label.
-  - Lookalikes from other scripts (`уіаn-сhаt` in Cyrillic) aren't caught: vet the names you pass.
 - **Parent.** A child records `parent: {runId, node, inbox, label}`: the owner's run, the node whose
   call started it (`start`'s `node`, which the group's `start` passes), the owner's `inbox` (none by
   default) and its own label.

@@ -46,6 +46,8 @@ export {
   agentCalls,
   type AgentCallUsage,
   type AgentCallView,
+  type AgentToolCallEntry,
+  type AgentToolOutcome,
   type AgentToolResult,
   type AskQuestion,
   type BeforeToolCall,

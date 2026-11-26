@@ -868,11 +868,27 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 | `iterRunRecordsBackwards(log)` | The same records newest first, read from the end, so a long run's latest records show without reading it all |
 | `runRecordAt(log, seq)` | The record of one seq, or `null`, found by bisecting the log's lines |
 | `foldRunLog(log)` | Each record with the value it wrote |
-| `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, and one call's full request and reply |
+| `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, each with the tool calls its reply asked for, and one call's full request and reply |
 | `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then. An update with nothing new takes no write lock, and one that writes commits every 200 runs; `{ runIds }` updates only those runs, as when one ends. `readRunIndex(runsDir, { result: false })` leaves out each row's `result` |
 
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
 waiting calls `advance` then.
+
+Each `agentCalls` entry's `toolCalls` lists its reply's tool calls in call order (none for a
+structured call or a failed one), enough to draw a node's calls as a timeline. Each has its
+`name`, `callId`, `outcome`, `closed`, and the `n` and time of its result's step (`resultN`,
+`resultAt`). `agentCalls` reads only the node steps, so it stays cheap for a whole run;
+`agentCall` gives a call's arguments and outputs. A call that `interrupt` or `cancel` closed keeps
+its outcome until its agent records the closer, which a cancelled run's agent never does.
+
+| `outcome` | The call |
+|---|---|
+| `ok` | Its result is recorded and isn't an error |
+| `error` | Its result is an error. When yian wrote it in place of running the call, `closed` says why: `skipped`, `refused`, `crashed`, `interrupted`, `timed_out` or `failed`. A call that an interrupt or a steer stopped while it ran has no `closed` word |
+| `held` | `beforeToolCall` holds it, and you haven't released or answered it |
+| `pending` | No result yet: it runs, waits on its answer or was released, or a crash cut it before its result and no resume has settled it |
+
+More outcomes may come, so show one you don't know as it is.
 
 `iterRunRecordsBackwards` takes `iterRunRecords`' `kinds`, `payloads` and `maxLineBytes`. Each
 entry's `offset` is the cursor for the page before it, so a chat can show its newest turns and

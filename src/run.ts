@@ -3169,6 +3169,47 @@ export interface AgentCallEntry {
   readonly attempts: number;
   /** The last attempt's finish reason (`interrupted` for a reply a host interrupt cut), `null` when it failed. */
   readonly finish: string | null;
+  /**
+   * The reply's tool calls, in call order. None for a reply that asked for none; for a structured
+   * call, whose reply's output-tool call is how the value came back; and for a call that failed,
+   * whose node runs none of what arrived.
+   */
+  readonly toolCalls: readonly AgentToolCallEntry[];
+}
+
+/**
+ * How an AGENT reply's tool call stands, as its node's steps record it:
+ * - `ok`: its result is recorded, and isn't an error.
+ * - `error`: its result is an error (`is_error`), the tool's own or one yian wrote in its place
+ *   (`closed` says which). A call that a host interrupt or a steer stopped while it ran is an
+ *   `error` with no `closed` word: the result the model read is the tool's.
+ * - `held`: the host's `beforeToolCall` held it, and the host hasn't released or answered it.
+ * - `pending`: no result is recorded yet. It runs, waits on its answer or was released, or a crash
+ *   cut it before its result and no resume has settled it.
+ *
+ * A call a host's `interrupt` or `cancel` closed keeps its outcome until its agent records the
+ * closer, which a cancelled run's agent never does. The list is open: a later version may add
+ * values, so show one you don't know as it is.
+ */
+export type AgentToolOutcome = "ok" | "error" | "held" | "pending";
+
+/** One tool call of an AGENT reply, as an `agentCalls` entry lists it. */
+export interface AgentToolCallEntry {
+  /** The tool's name, as the reply asked. */
+  readonly name: string;
+  /** The id of the reply's `tool_call` part. */
+  readonly callId: string;
+  readonly outcome: AgentToolOutcome;
+  /**
+   * As `AgentToolResult.closed`: `skipped`, `interrupted`, `timed_out`, `crashed` or `failed` for
+   * a result yian wrote in place of running the call, `refused` for one the host's
+   * `beforeToolCall` refused, else `null`.
+   */
+  readonly closed: string | null;
+  /** The `n` of its `tool_result` step; `null` without one. */
+  readonly resultN: number | null;
+  /** When its `tool_result` step was appended (the record's `at`); `null` without one. */
+  readonly resultAt: string | null;
 }
 
 /** The token counts a `model_call` step records, each `null` when the provider didn't report it. */
@@ -3294,25 +3335,30 @@ function agentStepCalls(steps: readonly ValueRecord[]): { calls: StepExchange[];
  * @param log The JSONL run log.
  * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
  *   line throws `RunLogLineTooLongError`.
- * @returns Each call's node, `n`, purpose, model, start, attempt count and finish.
+ * @returns Each call's node, `n`, purpose, model, start, attempt count and finish, and its reply's
+ *   tool calls with how each stands.
  * @throws `iterRunRecords`' errors.
  *
  * @example
- * for (const call of agentCalls(log)) show(call.nodeId, call.n, call.model, call.finish);
+ * for (const call of agentCalls(log)) {
+ *   show(call.nodeId, call.n, call.model, call.finish);
+ *   for (const tool of call.toolCalls) show(tool.name, tool.outcome);
+ * }
  */
 export function agentCalls(log: string, options: { maxLineBytes?: number | null } = {}): AgentCallEntry[] {
-  // Each node's steps in order, and the seq of each.
-  const nodes = new Map<string, { steps: ValueRecord[]; seqs: number[] }>();
-  for (const { envelope, seq } of iterRunRecords(log, { kinds: ["node_step"], maxLineBytes: options.maxLineBytes ?? null })) {
+  // Each node's steps in order, and the seq and time of each.
+  const nodes = new Map<string, { steps: ValueRecord[]; seqs: number[]; ats: string[] }>();
+  for (const { envelope, seq, at } of iterRunRecords(log, { kinds: ["node_step"], maxLineBytes: options.maxLineBytes ?? null })) {
     const { nodeId, step } = envelope!.record as NodeStepRecord;
     let node = nodes.get(nodeId);
-    if (node === undefined) nodes.set(nodeId, (node = { steps: [], seqs: [] }));
+    if (node === undefined) nodes.set(nodeId, (node = { steps: [], seqs: [], ats: [] }));
     node.steps.push(step as ValueRecord);
     node.seqs.push(seq);
+    node.ats.push(at);
   }
   const listed: { seq: number; entry: AgentCallEntry }[] = [];
-  for (const [nodeId, { steps, seqs }] of nodes) {
-    for (const { attempts } of agentStepCalls(steps).calls) {
+  for (const [nodeId, { steps, seqs, ats }] of nodes) {
+    for (const { attempts, results } of agentStepCalls(steps).calls) {
       const last = attempts.at(-1)!;
       const entry = {
         nodeId,
@@ -3322,11 +3368,43 @@ export function agentCalls(log: string, options: { maxLineBytes?: number | null 
         startedAt: attempts[0]!.step["started_at"] as string,
         attempts: attempts.length,
         finish: (last.step["finish"] as string | undefined) ?? null,
+        toolCalls: listedToolCalls(last, results, steps, ats),
       };
       listed.push({ seq: seqs[attempts[0]!.n - 1]!, entry });
     }
   }
   return listed.sort((a, b) => a.seq - b.seq).map(({ entry }) => entry);
+}
+
+/**
+ * Each tool call of `reply`, a call's last `model_call` step, in call order, with how it stands:
+ * its `tool_result` step from `results` (by call id), else whether a hold's `pending` step of the
+ * node's `steps` (by the reply's `n` and the call's index) still holds it, with no `released` step
+ * after; `ats` holds each step's record time. None when the step is a failure or a structured
+ * call's: only a chat reply's tool calls run.
+ */
+function listedToolCalls(
+  reply: NumberedStep,
+  results: StepExchange["results"],
+  steps: readonly ValueRecord[],
+  ats: readonly string[],
+): AgentToolCallEntry[] {
+  const output = reply.step["output"];
+  if (reply.step["purpose"] !== "chat" || Object.hasOwn(reply.step, "error") || output == null) return [];
+  const calls = Message.fromJSON(output).parts.filter((part) => part instanceof ToolCallPart);
+  return calls.map(({ name, id: callId }, index) => {
+    const result = results.get(callId);
+    if (result !== undefined) {
+      const outcome = result.step["is_error"] === true ? "error" : "ok";
+      const closed = (result.step["closed"] as string | undefined) ?? null;
+      return { name, callId, outcome, closed, resultN: result.n, resultAt: ats[result.n - 1]! };
+    }
+    const isHold = (step: ValueRecord) =>
+      step["kind"] === "pending" && step["held"] === true && Number(step["reply"]) === reply.n && Number(step["index"]) === index;
+    const hold = steps.find(isHold);
+    const held = hold !== undefined && !steps.some((step) => step["kind"] === "released" && step["call_id"] === hold["call_id"]);
+    return { name, callId, outcome: held ? "held" : "pending", closed: null, resultN: null, resultAt: null };
+  });
 }
 
 /**

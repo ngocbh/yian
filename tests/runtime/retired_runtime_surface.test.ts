@@ -144,7 +144,7 @@ test("only the final log-only runtime and run API remain", () => {
   expect(Object.getOwnPropertyNames(run.RunResult.prototype)).toEqual(["constructor"]);
 });
 
-test("the package root exports exactly its documented root list plus ToolAttemptsFailed, pending, the message names, InboxRef, the host calls, the memory names and the author label", () => {
+test("the package root exports exactly its documented root list plus ToolAttemptsFailed, pending, the message names, InboxRef, the host calls, nodeView, the memory names and the author label", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -157,6 +157,7 @@ test("the package root exports exactly its documented root list plus ToolAttempt
     interrupt: run.interrupt,
     cancel: run.cancel,
     pendingCalls: run.pendingCalls,
+    nodeView: run.nodeView,
     RunBusyError: run.RunBusyError,
     DeliveryRefused: run.DeliveryRefused,
     Failure,

@@ -538,6 +538,8 @@ function bindFrom(
  *
  * @param wiringOverride The wiring the run gave the node in place of the flow's (a growth's), or
  *   `null`.
+ * @param options.reserved Whether to bind the node's reserved values too (default `true`); without
+ *   them, nothing an AGENT's call-time config or memory grants need is read.
  * @returns The bound inputs.
  * @throws BindingError when a source doesn't evaluate, and the node's `bindReserved` errors.
  */
@@ -546,14 +548,24 @@ export function bindStarted(
   flow: Flow,
   pool: VariablePool,
   wiringOverride: JsonObject | null,
+  options: { reserved?: boolean } = {},
 ): Record<string, unknown> {
-  return bindPool(node, flow, pool, wiringOverride).inputs;
+  return bindPool(node, flow, pool, wiringOverride, options.reserved ?? true).inputs;
 }
 
-/** `bindFrom`'s binding over a built `pool`. */
-function bindPool(node: Node, flow: Flow, pool: VariablePool, wiringOverride: JsonObject | null): Rebound {
+/** `bindFrom`'s binding over a built `pool`, its reserved values only when `reserved`. */
+function bindPool(
+  node: Node,
+  flow: Flow,
+  pool: VariablePool,
+  wiringOverride: JsonObject | null,
+  reserved = true,
+): Rebound {
   const nodeWiring = wiringFor(node, flow, wiringOverride);
-  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, { sourceResolver: null });
+  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, {
+    sourceResolver: null,
+    bindReserved: reserved ? null : () => ({}),
+  });
   const inputs = applyDefaults(node.params ?? [], record);
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = {
     signal: new AbortController().signal,

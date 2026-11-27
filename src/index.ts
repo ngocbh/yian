@@ -19,6 +19,8 @@
  *   `WithdrawnEvent`), `complete`, `release` (with `ReleaseOptions`), `close`, `interrupt` (with
  *   `InterruptOptions`), `cancel` and `pendingCalls`, their `DeliveryOptions`, and their errors
  *   `RunBusyError` and `DeliveryRefused` (`run`);
+ * - `nodeView` (`run`), which reads one node attempt of a run log, with its types `NodeView`,
+ *   `NodeValue` and `NodeStatus`;
  * - memory: `MemoryBase`, `isMemory`, the session's errors `MemoryBusyError`,
  *   `ChangeIdReusedError` and `MemoryMissingError`, `memoryErrorKind`, and the contract and
  *   session types (`memory/base`); `FileMemory` and `FileMemoryOptions` (`memory/file`);
@@ -85,6 +87,10 @@ export {
   DeliveryRefused,
   interrupt,
   type InterruptOptions,
+  type NodeStatus,
+  type NodeValue,
+  type NodeView,
+  nodeView,
   pendingCalls,
   release,
   type ReleaseOptions,

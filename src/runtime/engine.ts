@@ -266,7 +266,8 @@ export function resumedAttemptEvents(state: RunState, record: RunResumedRecord):
  * names), a completed call, a released hold, an inbox close, an interrupt or a cancel, and who
  * makes it (`by`, recorded on its record).
  * An interrupt's `running` are the in-flight readers of its inbox, which only the engine knows;
- * absent offline: then any in-flight node counts as an open reader for the idle rule.
+ * absent offline: then any in-flight node counts as an open reader for the idle rule. Its
+ * `standing` (default true) says whether its Stop stands for a reader that opens the inbox later.
  */
 export type DeliveryOp = (
   | { readonly kind: "send"; readonly inbox: string; readonly event: unknown; readonly key?: string | null }
@@ -274,7 +275,7 @@ export type DeliveryOp = (
   | { readonly kind: "complete"; readonly callId: string; readonly result: CompleteResult }
   | { readonly kind: "release"; readonly callId: string; readonly note?: string | null }
   | { readonly kind: "close"; readonly inbox: string }
-  | { readonly kind: "interrupt"; readonly inbox: string; readonly running?: readonly string[] }
+  | { readonly kind: "interrupt"; readonly inbox: string; readonly running?: readonly string[]; readonly standing?: boolean }
   | { readonly kind: "cancel" }
 ) & { readonly by?: Author | null };
 
@@ -283,7 +284,8 @@ export type DeliveryOp = (
  *
  * @returns null for a no-op (nothing to withdraw, an identical repeat complete, a repeat release,
  *   closing a closed inbox, or an interrupt while the run waits for the inbox's next message or is
- *   already stopping), and the seq of the first send for a repeat of a keyed send.
+ *   already stopping, or one leaving no Stop with no reader to cut), and the seq of the first send
+ *   for a repeat of a keyed send.
  * @throws DeliveryRefused when the run refuses it.
  * @throws TypeError when `op` is no delivery.
  */
@@ -301,7 +303,7 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
     case "close":
       return prepareInboxClosed(state, op.inbox, by);
     case "interrupt":
-      return prepareInterrupt(state, op.inbox, op.running ?? null, by);
+      return prepareInterrupt(state, op.inbox, op.running ?? null, by, op.standing ?? true);
     case "cancel":
       return prepareRunCancelled(state, by);
     default: {

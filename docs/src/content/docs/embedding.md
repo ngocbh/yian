@@ -253,7 +253,8 @@ Your program reaches a waiting run by its log path:
 | `close(log, inbox)` | the seq, or `null` if already closed | Refuses later sends; takes still read what is queued |
 | `complete(log, callId, result)` | the seq, or `null` for the same answer twice by the same `by` | Answers a pending host call (see [Pending host calls](#pending-host-calls)) or a held one. The same answer by another `by` is refused `call_settled` |
 | `release(log, callId, { note })` | the seq, or `null` if released before by the same `by` | Runs a held call (see [Gate tool calls](#gate-tool-calls)). A release after one by another `by` is refused `call_settled` |
-| `interrupt(log, inbox)` | `{seq, nodes, calls}` | Stops the agents steered by that inbox |
+| `interrupt(log, inbox)` | `{seq, nodes, calls, released}` | Stops the agents steered by that inbox |
+| `interrupt(log, inbox, { standing: false })` | `{seq, nodes, calls, released}` | Stops only the agents steered by that inbox now; none that starts later |
 | `cancel(log)` | the open host calls it closed | Ends the run as `cancelled` |
 | `pendingCalls(log)` | `PendingCall[]` | Lists open host calls; reads without the lock |
 
@@ -423,6 +424,12 @@ calls that hadn't run are closed too (`released`). A running tool call learns of
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.
+
+With `standing: false`, `interrupt` stops only the agents reading the inbox now. An agent that
+starts reading it later isn't stopped, and with none reading it, nothing is appended. When your
+process isn't running the run, only waiting agents count: an agent a crash or a stop left mid-step
+isn't stopped when the run resumes. Use it when others share the inbox: otherwise a turn that has
+already taken another sender's message could be stopped before it answers.
 
 `cancel` ends the run with no output, and closes its open calls. If your process
 is running the run, its running nodes are stopped at once. Otherwise `cancel` reads only the
@@ -674,20 +681,17 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   1. It takes back the model's own unread sends to that inbox (`withdraw` with the owner's
      `by`), never anyone else's. `by` names no node, so two agents of one owner run take back
      each other's sends.
-  2. It [interrupts](#interrupt-and-cancel) the inbox: the agents reading it as their steer inbox
-     stop their current step, and their open calls close, held calls and released calls not yet
-     run among them. The run goes on; `stop` ends it. With no agent reading it now, the next turn
-     on the inbox stops at once, and may use up a message another sender queued without
-     answering it.
+  2. It [interrupts](#interrupt-and-cancel) the inbox with `standing: false`: the agents reading
+     it as their steer inbox now stop their current step, and their open calls close, held calls
+     and released calls not yet run among them. The run goes on; `stop` ends it. With no agent
+     reading it now, nothing is cut, and the run's next step runs as it would have.
 
-  The status adds `interrupted`, what it did (`interrupted (took back 1 message)`), with how
-  many queued messages from others that next turn may use up, and `taken_back`, the first 20
-  texts taken back, each cut at 4000 characters with a note. When the take-back lands and the
-  interrupt then fails, the status's `note` says why, and what came back is still listed. The
-  driver's own `interrupt` returns a `ChildInterrupt`: the status, the sends taken back
-  (`taken`), whether the interrupt happened (`landed`), the queued count (`queued`) and
-  `interrupt`'s result. Without a sender it takes back nothing, since the host's own sends are
-  no one's.
+  The status adds `interrupted`, what it did (`interrupted (took back 1 message)`), and
+  `taken_back`, the first 20 texts taken back, each cut at 4000 characters with a note. When the
+  take-back lands and the interrupt then fails, the status's `note` says why, and what came back
+  is still listed. The driver's own `interrupt` returns a `ChildInterrupt`: the status, the sends
+  taken back (`taken`), whether the interrupt happened (`landed`) and `interrupt`'s result.
+  Without a sender it takes back nothing, since the host's own sends are no one's.
 - **Start.** With the `start` option the group has `<group>_start` too, which takes `flow`, `inputs`
   and `content` (a draft's text). In order:
   1. `resolve` finds the flow the call names. Throw a `ReportedToolError` for one it may not start,
@@ -876,11 +880,27 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
 | `iterRunRecordsBackwards(log)` | The same records newest first, read from the end, so a long run's latest records show without reading it all |
 | `runRecordAt(log, seq)` | The record of one seq, or `null`, found by bisecting the log's lines |
 | `foldRunLog(log)` | Each record with the value it wrote |
-| `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, and one call's full request and reply |
+| `agentCalls(log)`, `agentCall(log, { nodeId, n })` | The agents' model calls, each with the tool calls its reply asked for, and one call's full request and reply |
 | `updateRunIndex(runsDir)`, `readRunIndex(runsDir)` | An `index.sqlite` with one row per run folder, which you can delete and rebuild. An update rebuilds a damaged one with a warning, and a read gives `[]` until then. An update with nothing new takes no write lock, and one that writes commits every 200 runs; `{ runIds }` updates only those runs, as when one ends. `readRunIndex(runsDir, { result: false })` leaves out each row's `result` |
 
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
 waiting calls `advance` then.
+
+Each `agentCalls` entry's `toolCalls` lists its reply's tool calls in call order (none for a
+structured call or a failed one), enough to draw a node's calls as a timeline. Each has its
+`name`, `callId`, `outcome`, `closed`, and the `n` and time of its result's step (`resultN`,
+`resultAt`). `agentCalls` reads only the node steps, so it stays cheap for a whole run;
+`agentCall` gives a call's arguments and outputs. A call that `interrupt` or `cancel` closed keeps
+its outcome until its agent records the closer, which a cancelled run's agent never does.
+
+| `outcome` | The call |
+|---|---|
+| `ok` | Its result is recorded and isn't an error |
+| `error` | Its result is an error. When yian wrote it in place of running the call, `closed` says why: `skipped`, `refused`, `crashed`, `interrupted`, `timed_out` or `failed`. A call that an interrupt or a steer stopped while it ran has no `closed` word |
+| `held` | `beforeToolCall` holds it, and you haven't released or answered it |
+| `pending` | No result yet: it runs, waits on its answer or was released, or a crash cut it before its result and no resume has settled it |
+
+More outcomes may come, so show one you don't know as it is.
 
 `iterRunRecordsBackwards` takes `iterRunRecords`' `kinds`, `payloads` and `maxLineBytes`. Each
 entry's `offset` is the cursor for the page before it, so a chat can show its newest turns and

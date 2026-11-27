@@ -322,6 +322,8 @@ A case can't hold code, so its host is declared under `host`.
     is live, when it reaches the point; the delivery lands in the same tick, through the run's
     engine. It interrupts every AGENT reading that inbox as its `steer_inbox:`, running or
     waiting.
+  - `{interrupt, standing: false}`, with or without `after`, calls `interrupt(log, inbox,
+    {standing: false})`, which cuts only the AGENTs reading the inbox then and leaves no Stop.
   - `{withdraw, after: {node: <node id>, <point>}}` calls `withdraw(log, inbox)` while the run is
     live, when it reaches the point, through the run's engine.
   - `{release, note, after: {node: <node id>, <point>}}` calls `release(log, callId, {note})`
@@ -549,7 +551,7 @@ they are, except as the rules below say), and an empty payload is left out.
 | `run_waiting` | null | `node_ids` |
 | `inbox_closed` | null | `inbox`, `by` |
 | `inbox_withdrawn` | null | `inbox`, `events`, `by`, `chosen` |
-| `interrupted` | null | `inbox`, `nodes` (may be empty), `by` |
+| `interrupted` | null | `inbox`, `nodes` (may be empty), `by`, `standing` |
 | `run_cancelled` | null | `by` |
 | `run_failed` | null | `failure` |
 | `node_started` | `node_id` | none |

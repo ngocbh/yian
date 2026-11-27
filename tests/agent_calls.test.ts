@@ -1,7 +1,8 @@
 /**
- * A host reads a run log's AGENT model calls (`agentCalls`) and one call's view (`agentCall`): the
- * request rebuilt from the recorded flow and the steps before it, checked against the recorded
- * digest, then the attempts, the reply and its tool results as recorded.
+ * A host reads a run log's AGENT model calls (`agentCalls`), each with its reply's tool calls and
+ * how they stand, and one call's view (`agentCall`): the request rebuilt from the recorded flow
+ * and the steps before it, checked against the recorded digest, then the attempts, the reply and
+ * its tool results as recorded.
  *
  * Each run is logged with a scripted model, which keeps every request it received; a rebuilt
  * request must equal the one the model received.
@@ -15,7 +16,7 @@ import { afterAll, expect, test } from "bun:test";
 
 import { loadFlow } from "../src/compose/loader.ts";
 import { ProviderError } from "../src/llm/errors.ts";
-import { type ChatModel, EventStream, Finish, TextDelta } from "../src/llm/events.ts";
+import { type ChatModel, EventStream, Finish, TextDelta, ToolCallDelta } from "../src/llm/events.ts";
 import { NoAuth } from "../src/llm/auth.ts";
 import { RouteModel } from "../src/llm/executor.ts";
 import { Message as ModelMessage, NamedTool, type Request, Response, ToolCallPart, Usage } from "../src/llm/messages.ts";
@@ -35,21 +36,25 @@ import {
   type AgentCallView,
   agentCall,
   agentCalls,
+  type AgentToolOutcome,
   complete,
   interrupt,
   pendingCalls,
   type Message,
+  release,
   type RunFlowOptions,
   runFlow,
   send,
 } from "../src/run.ts";
-import { pending } from "../src/tools/context.ts";
+import { iterRunRecords, type NodeStepRecord } from "../src/runtime/log.ts";
+import { pending, type ToolContext } from "../src/tools/context.ts";
+import { ReportedToolError } from "../src/tools/errors.ts";
 import { Skill } from "../src/skills/catalog.ts";
 import { LOAD_SKILL } from "../src/skills/tool.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { logJson } from "../src/typesys/json.ts";
 import { RecordingSession } from "./helpers/memory_fakes.ts";
-import { callReply, crashAfter, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
+import { aborted, callReply, crashAfter, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
 import { outputTag } from "./helpers/output_tags.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-calls-"));
@@ -77,6 +82,25 @@ function topicTool(name: string, onCall: () => void = () => {}): FunctionTool {
 
 /** The tools `lookup` and `save`. */
 const toolsOf = () => ({ lookup: topicTool("lookup"), save: topicTool("save") });
+
+/** A tool call as an `agentCalls` entry lists it, its result at step `resultN` (`null` for none). */
+const listedTool = (
+  name: string,
+  callId: string,
+  outcome: AgentToolOutcome,
+  resultN: number | null = null,
+  closed: string | null = null,
+) => ({
+  name,
+  callId,
+  outcome,
+  closed,
+  resultN,
+  resultAt: resultN === null ? null : expect.any(String),
+});
+
+/** Each call's tool calls, as `agentCalls` lists them for the log at `log`. */
+const listedTools = (log: string) => agentCalls(log).map(({ toolCalls }) => toolCalls);
 
 /** Run `text` over `model` with a log; the other options go to `runFlow`. */
 async function run(
@@ -147,7 +171,10 @@ test("a tool loop: each call's request is the one sent, its reply and its two re
     attempts: 1,
     finish,
   });
-  expect(agentCalls(log)).toEqual([listed(1, "tool_calls"), listed(4, "stop")]);
+  expect(agentCalls(log)).toEqual([
+    { ...listed(1, "tool_calls"), toolCalls: [listedTool("lookup", "call-a", "ok", 2), listedTool("save", "call-b", "ok", 3)] },
+    { ...listed(4, "stop"), toolCalls: [] },
+  ]);
 
   const first = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
   expect(first.digestMismatch).toBe(false);
@@ -282,6 +309,7 @@ test("a retried call: its attempts are one call, which the n of either attempt n
       startedAt: new Date(START).toISOString(),
       attempts: 2,
       finish: "stop",
+      toolCalls: [],
     },
   ]);
   const byFirst = await agentCall(log, { nodeId: "writer", n: 1 }, { env: retryEnv });
@@ -451,7 +479,10 @@ test("a waiting run's call shows a pending tool call without a result, then the 
     ["call-a", "lookup:a"],
     ["call-b", null],
   ]);
+  // Step 3 is save's `pending` step.
+  expect(agentCalls(log)[0]!.toolCalls).toEqual([listedTool("lookup", "call-a", "ok", 2), listedTool("save", "call-b", "pending")]);
   await complete(log, pendingCalls(log)[0]!.callId, { output: "saved" }, { env: NO_ENV });
+  expect(agentCalls(log)[0]!.toolCalls).toEqual([listedTool("lookup", "call-a", "ok", 2), listedTool("save", "call-b", "ok", 4)]);
   const answered = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
   expect(answered.toolResults.map(({ callId, output }) => [callId, output])).toEqual([
     ["call-a", "lookup:a"],
@@ -548,6 +579,8 @@ test("a structured call's request is rebuilt by the default model access without
   const { log, result } = await run(STRUCTURED, model);
   expect(result.status, result.failure?.message).toBe("succeeded");
   const [entry] = agentCalls(log);
+  // Its reply's output-tool call is how the value came back, not a tool call the agent ran.
+  expect(entry!.toolCalls).toEqual([]);
   // No model access is passed and no key is set, so nothing could build the model.
   const view = await agentCall(log, entry!, { env: NO_ENV });
   expect(view.digestMismatch).toBe(false);
@@ -1039,4 +1072,124 @@ test("an agent granting a memory and a flow: both are its node scope, live and i
   }
   const second = await agentCall(log, { nodeId: "helper", n: calls[1]!.n }, { env: NO_ENV });
   expect(second.toolResults.map(({ name, output }) => [name, output])).toEqual([["shout", "hey!"]]);
+});
+
+/** The record time of node `nodeId`'s step `n` in the log at `log`. */
+function stepAt(log: string, nodeId: string, n: number): string {
+  for (const { envelope, at } of iterRunRecords(log, { kinds: ["node_step"] })) {
+    const record = envelope.record as NodeStepRecord;
+    if (record.nodeId === nodeId && record.n === n) return at;
+  }
+  throw new Error(`no step ${n} of ${nodeId}`);
+}
+
+/** A tool `name` taking no arguments that runs `execute`. */
+const plainTool = (name: string, execute: (ctx: ToolContext) => unknown) =>
+  new FunctionTool({
+    name,
+    description: `Tool ${name}.`,
+    parametersJsonSchema: { type: "object", properties: {} },
+    execute: (_args, ctx) => execute(ctx),
+  });
+
+const scripted = (...replies: Response[]) => new ScriptedModel(replies, { provider: "anthropic", model: "claude-test" });
+
+test("agentCalls lists a reply's tool calls in call order: one ok, one an error, each with its result's step and time", async () => {
+  const fail = plainTool("fail", () => {
+    throw new ReportedToolError("no such topic");
+  });
+  const text = TOOLS.replace("tools: [lookup, save]", "tools: [lookup, fail]");
+  const model = scripted(callReply(["lookup", { topic: "a" }, "call-a"], ["fail", {}, "call-b"]), textReply("done"));
+  const { log, result } = await run(text, model, { topic: "owls" }, { tools: { lookup: topicTool("lookup"), fail } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const [first, second] = agentCalls(log);
+  expect(first!.toolCalls).toEqual([listedTool("lookup", "call-a", "ok", 2), listedTool("fail", "call-b", "error", 3)]);
+  expect(first!.toolCalls.map(({ resultAt }) => resultAt)).toEqual([stepAt(log, "writer", 2), stepAt(log, "writer", 3)]);
+  expect(second!.toolCalls).toEqual([]);
+});
+
+test("each of a node's calls lists its own reply's tool calls, though their ids repeat across replies", async () => {
+  const model = scripted(
+    callReply(["lookup", { topic: "a" }, "c1"]),
+    callReply(["save", { topic: "b" }, "c1"], ["lookup", { topic: "c" }, "c2"]),
+    textReply("done"),
+  );
+  const { log, result } = await run(TOOLS, model, { topic: "owls" }, { tools: toolsOf() });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(agentCalls(log).map(({ n, toolCalls }) => [n, toolCalls])).toEqual([
+    [1, [listedTool("lookup", "c1", "ok", 2)]],
+    [3, [listedTool("save", "c1", "ok", 4), listedTool("lookup", "c2", "ok", 5)]],
+    [6, []],
+  ]);
+});
+
+test("a call that asked for no tools lists none, nor does a failed call, whose node ran none of what arrived", async () => {
+  const { log } = await run(TOOLS, scripted(textReply("done")), { topic: "owls" }, { tools: toolsOf() });
+  expect(listedTools(log)).toEqual([[]]);
+
+  const cut = new ScriptedModel(
+    [[new ToolCallDelta({ index: 0, id: "c1", name: "lookup", arguments: '{"topic": "a"}' }), new ProviderError("server", "gone", { retryable: false })]],
+    { provider: "anthropic", model: "claude-test" },
+  );
+  const failed = await run(TOOLS, cut, { topic: "owls" }, { tools: toolsOf() });
+  expect(failed.result.status).toBe("failed");
+  // The failed attempt recorded the call that arrived before the error.
+  expect(readFileSync(failed.log, "utf8")).toContain('"id":"c1","name":"lookup","type":"tool_call"');
+  expect(agentCalls(failed.log)).toMatchObject([{ finish: null, toolCalls: [] }]);
+});
+
+test("a tool call a crash cut is pending, then an error closed crashed once the resume writes its closer", async () => {
+  const replies = () => [callReply(["lookup", { topic: "a" }, "call-a"]), textReply("done")];
+  const uncut = await run(TOOLS, scripted(...replies()), { topic: "owls" }, { tools: toolsOf() });
+  // Cut right after the reply, while its tool call runs.
+  const k = readFileSync(uncut.log, "utf8").split("\n").findIndex((line) => line.includes('"model_call"')) + 1;
+  const log = runLog();
+  await crashAfter(k, () => run(TOOLS, scripted(...replies()), { topic: "owls" }, { log, tools: toolsOf() }));
+  expect(listedTools(log)).toEqual([[listedTool("lookup", "call-a", "pending")]]);
+
+  const resumed = await advance({ log, models: serving(scripted(textReply("done"))), env: NO_ENV, tools: toolsOf() });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(listedTools(log)).toEqual([[listedTool("lookup", "call-a", "error", 2, "crashed")], []]);
+});
+
+test("a call the host's check held is held until released, pending until it runs, then ok", async () => {
+  const log = runLog();
+  const models = serving(scripted(callReply(["lookup", { topic: "a" }, "call-a"]), textReply("done")));
+  const options = { log, env: NO_ENV, tools: toolsOf(), models, beforeToolCall: () => pending() };
+  expect((await runFlow(await loadFlow(TOOLS), { topic: "owls" }, options)).status).toBe("waiting");
+  expect(listedTools(log)).toEqual([[listedTool("lookup", "call-a", "held")]]);
+  await release(log, pendingCalls(log)[0]!.callId, { env: NO_ENV });
+  expect(listedTools(log)).toEqual([[listedTool("lookup", "call-a", "pending")]]);
+  const done = await advance(options);
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  // Step 2 is the hold and step 3 its release.
+  expect(listedTools(log)).toEqual([[listedTool("lookup", "call-a", "ok", 4)], []]);
+});
+
+test("a pending call an interrupt closed is an error closed interrupted", async () => {
+  const lookup = plainTool("lookup", () => pending());
+  const model = scripted(callReply(["lookup", {}, "c1"]));
+  const inputs = { history: [], message: "go" };
+  const { log, result } = await run(chat("Optional(str)"), model, inputs, { tools: { lookup } });
+  expect(result.status, result.failure?.message).toBe("waiting");
+  await interrupt(log, "notes", { env: NO_ENV });
+  const done = await advance({ log, models: serving(model), env: NO_ENV, tools: { lookup } });
+  expect(done.status, done.failure?.message).toBe("succeeded");
+  // Step 2 is its `pending` step.
+  expect(listedTools(log)).toEqual([[listedTool("lookup", "c1", "error", 3, "interrupted")]]);
+});
+
+test.each<[string, (log: string) => Promise<unknown>, (ctx: ToolContext) => AbortSignal]>([
+  ["an interrupt", (log) => interrupt(log, "notes", { env: NO_ENV }), (ctx) => ctx.interrupted],
+  ["a steer", (log) => send(log, "notes", "stop", { env: NO_ENV }), (ctx) => ctx.steered],
+])("a running call that %s stopped is an error yian wrote no closer for", async (_name, act, signal) => {
+  const log = runLog();
+  const lookup = plainTool("lookup", (ctx) => {
+    void act(log);
+    return aborted(signal(ctx));
+  });
+  const model = scripted(callReply(["lookup", {}, "c1"]), textReply("done"));
+  const { result } = await run(chat("Optional(str)"), model, { history: [], message: "go" }, { log, tools: { lookup } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(agentCalls(log)[0]!.toolCalls).toEqual([listedTool("lookup", "c1", "error", 2)]);
 });

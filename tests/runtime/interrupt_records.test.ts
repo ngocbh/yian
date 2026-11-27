@@ -289,6 +289,39 @@ test.each<[string, (run: Run) => void, readonly string[] | null, string[] | null
   else expect([...(prepared!.record as InterruptedRecord).nodes]).toEqual(nodes);
 });
 
+test.each<[string, (run: Run) => void, readonly string[] | null, string[] | null]>([
+  ["idle at the take: no record", waitTake, [], null],
+  [
+    "the take was answered, not woken: no record",
+    (run) => {
+      waitTake(run);
+      commitPrepared(run.log, run.state, prepareSend(run.state, "msgs", "x"));
+    },
+    [],
+    null,
+  ],
+  ["no take waits, nothing runs: no record", () => {}, [], null],
+  ["a running reader: named", waitTake, ["a"], ["a"]],
+  ["offline, crashed nodes in flight and the take waiting: no record", waitTake, null, null],
+])("prepareInterrupt that leaves no Stop: %s", (_, setup, running, nodes) => {
+  const run = readersFlow();
+  setup(run);
+  const prepared = prepareInterrupt(run.state, "msgs", running, null, false);
+  if (nodes === null) expect(prepared).toBeNull();
+  else expect(prepared!.record).toEqual(new InterruptedRecord("msgs", nodes, { standing: false }));
+});
+
+test("an interrupt that leaves no Stop names the waiting readers offline and leaves the rest as the default does", () => {
+  const { log, state } = interruptible();
+  const prepared = prepareInterrupt(state, "msgs", null, ADA, false)!;
+  expect(prepared.record).toEqual(new InterruptedRecord("msgs", ["w"], { by: ADA, standing: false }));
+  commitPrepared(log, state, prepared);
+  expect(state.waits.interrupts.get("w")).toBe(prepared.expectedSequence);
+  expect(state.waits.stops.size).toBe(0);
+  // Already stopping: every current reader holds an interrupt.
+  expect(prepareInterrupt(state, "msgs", null, ADA, false)).toBeNull();
+});
+
 test("already stopping: while a Stop stands, a repeated interrupt records nothing, even with a reader just opened", () => {
   const run = readersFlow();
   expect(interruptNow(run, [])).toEqual([]);
@@ -595,6 +628,14 @@ describe("stops", () => {
   test("another node's success keeps the Stop", () => {
     const w = fold(...START, new NodeStartedRecord("work"), stop("msgs"), new NodeSucceededRecord("work", 1));
     expect(w.stops.has("msgs")).toBe(true);
+  });
+
+  test("a record that leaves no Stop sets none, and keeps the one that stands", () => {
+    const cut = new InterruptedRecord("msgs", ["reply"], { standing: false });
+    const w = fold(...START, new NodeStartedRecord("reply"), cut);
+    expect([w.stops.size, w.interrupts.get("reply")]).toEqual([0, 3]);
+    const kept = fold(...START, stop("msgs"), new NodeStartedRecord("reply"), cut);
+    expect(kept.stops.get("msgs")).toEqual({ seq: 2, stopped: false, by: null });
   });
 
   test("an interrupted record's by is the Stop's", () => {

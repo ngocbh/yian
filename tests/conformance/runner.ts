@@ -586,7 +586,8 @@ function checkStop(stop: Value | undefined): void {
  * `down: true` (sent after the crash, before the resume), `{close}` items, `{withdraw}` items
  * (`withdraw(run, inbox)`; with `sends`, the run's sends to any inbox by place in the log,
  * `withdraw(run, inbox, {events})`, not with `after`) and `{interrupt}` items (`interrupt(run,
- * inbox)`), each optionally with `after`, `{complete, output}` or `{complete, error}` items, and
+ * inbox)`; with `standing: false`, `interrupt(run, inbox, {standing: false})`), each optionally
+ * with `after`, `{complete, output}` or `{complete, error}` items, and
  * `{release, note}` items (`note` optional), optionally with `after`. Any item may say who makes
  * it (`by`, a mapping).
  */
@@ -606,6 +607,7 @@ function checkSends(value: Value | undefined, kind: Kind): void {
     const send = typeof (item as Case | null)?.["inbox"] === "string";
     const completes = typeof (item as Case | null)?.["complete"] === "string";
     const interrupts = typeof (item as Case | null)?.["interrupt"] === "string";
+    const unstanding = (item as Case | null)?.["standing"] === false;
     const withdraws = typeof (item as Case | null)?.["withdraw"] === "string";
     const chosen = (item as Case | null)?.["sends"];
     const releases =
@@ -624,12 +626,14 @@ function checkSends(value: Value | undefined, kind: Kind): void {
       (fields === "after,withdraw" && withdraws && isMapping((item as Case)["after"])) ||
       (fields === "interrupt" && interrupts) ||
       (fields === "after,interrupt" && interrupts && isMapping((item as Case)["after"])) ||
+      (fields === "interrupt,standing" && interrupts && unstanding) ||
+      (fields === "after,interrupt,standing" && interrupts && unstanding && isMapping((item as Case)["after"])) ||
       (fields === "complete,output" && completes) ||
       (fields === "complete,error" && completes && typeof (item as Case)["error"] === "string") ||
       (releases && (!Object.hasOwn(item as Case, "after") || isMapping((item as Case)["after"]))));
     if (!valid) {
       throw new Error(
-        "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after? | sends?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
+        "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after? | sends?}, {interrupt, after?, standing: false?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
           "`hold: true` marks an item sent while the run waits that isn't followed by an advance",
       );
     }
@@ -1804,7 +1808,7 @@ class Inbox {
   readonly #pending: { label: string; node: string; action: Case }[] = [];
   readonly #onStop: () => void;
   readonly #deliver: (inbox: string, event: Value, by: Author | null) => void;
-  readonly #interrupt: (inbox: string, by: Author | null) => void;
+  readonly #interrupt: (inbox: string, by: Author | null, standing: boolean) => void;
   readonly #withdraw: (inbox: string, by: Author | null) => void;
   readonly #hold: (input: string) => void;
   readonly #release: (callId: string, note: string | null, by: Author | null) => void;
@@ -1814,7 +1818,7 @@ class Inbox {
     onStop: () => void = () => {},
     sends: readonly Case[] = [],
     deliver: (inbox: string, event: Value, by: Author | null) => void = () => {},
-    interrupt: (inbox: string, by: Author | null) => void = () => {},
+    interrupt: (inbox: string, by: Author | null, standing: boolean) => void = () => {},
     withdraw: (inbox: string, by: Author | null) => void = () => {},
     memory: Case = {},
     hold: (input: string) => void = () => {},
@@ -1839,7 +1843,7 @@ class Inbox {
       const { node, ...point } = item["after"] as Case;
       const by = get(item, "by", null)!;
       const action: Case = Object.hasOwn(item, "interrupt")
-        ? { after: point, interrupt: item["interrupt"]!, by }
+        ? { after: point, interrupt: item["interrupt"]!, standing: item["standing"] ?? true, by }
         : Object.hasOwn(item, "withdraw")
           ? { after: point, withdraw: item["withdraw"]!, by }
           : Object.hasOwn(item, "release")
@@ -1876,7 +1880,7 @@ class Inbox {
       this.#withdraw(action["withdraw"] as string, by);
       return;
     }
-    this.#interrupt(action["interrupt"] as string, by);
+    this.#interrupt(action["interrupt"] as string, by, action["standing"] as boolean);
   }
 
   /** Count a `model_call`, `tool_call`, `gate_call` or `refusal` of `node`; return its number, `null` unarmed. */
@@ -2354,8 +2358,8 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?:
       sent.catch(() => {});
       delivered.push(sent);
     },
-    (name, by) => {
-      const cut = interrupt(log, name, { env, by });
+    (name, by, standing) => {
+      const cut = interrupt(log, name, { env, by, standing });
       cut.catch(() => {});
       delivered.push(cut);
     },
@@ -2631,7 +2635,7 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["run_waiting", [null, ["node_ids"]]],
   ["inbox_closed", [null, ["inbox", "by"]]],
   ["inbox_withdrawn", [null, ["inbox", "events", "by", "chosen"]]],
-  ["interrupted", [null, ["inbox", "nodes", "by"]]],
+  ["interrupted", [null, ["inbox", "nodes", "by", "standing"]]],
   ["run_cancelled", [null, ["by"]]],
   ["run_failed", [null, ["failure"]]],
   ["node_started", ["node_id", []]],
@@ -2997,7 +3001,9 @@ async function deliver(log: string, item: Case, env: Env): Promise<void> {
       const before = nextSequence(log);
       checkWithdrawal(log, before, events, await withdraw(log, item["withdraw"] as string, { ...options, events }));
     }
-  } else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, options);
+  } else if (Object.hasOwn(item, "interrupt")) {
+    await interrupt(log, item["interrupt"] as string, { ...options, standing: (item["standing"] ?? true) as boolean });
+  }
   else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), options);
   else if (Object.hasOwn(item, "release")) {
     await release(log, item["release"] as string, { ...options, note: get(item, "note", null) as string | null });

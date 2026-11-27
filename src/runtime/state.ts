@@ -1570,23 +1570,26 @@ export function prepareRunCancelled(state: RunState, by: Author | null = null): 
  * reading it as their steer inbox, `running` (the engine's in-flight readers, in flight order)
  * then each waiting node whose `node_waiting` named `inbox`, leaving out nodes already being
  * stopped (holding a pending interrupt, or running after honoring one). With no reader it names
- * none and only records the Stop, which a reader opening the inbox while it stands honors. The
- * record closes the named nodes' open calls, and a waiting node's released calls (`interrupted`,
- * `interruptedCalls`); a closed inbox can still be interrupted, since a reply may still run on
- * what it already read.
+ * none and only records the Stop, which a reader opening the inbox while it stands honors. With
+ * `standing` false the record leaves no Stop: it cuts only the readers it names, and with none to
+ * name nothing is recorded. The record closes the named nodes' open calls, and a waiting node's
+ * released calls (`interrupted`, `interruptedCalls`); a closed inbox can still be interrupted,
+ * since a reply may still run on what it already read.
  *
  * @param state The run's state.
  * @param inbox The name of one of the START's `Inbox(T)` params.
  * @param running The in-flight nodes reading `inbox` as their steer inbox, which only the engine
  *   knows; `null` offline, where any in-flight node counts as an open reader for the idle rule,
  *   and any in-flight node that reads a steer inbox as a current reader for "already stopping".
+ *   With `standing` false only the waiting readers are named offline.
  * @param by Who makes the Stop, recorded with it, and copied by the record the run applies for
  *   it; `null` for none.
+ * @param standing Whether the Stop stands for a reader that opens the inbox later.
  * @returns The canonical `InterruptedRecord`, its plan and a `CallClosed {reason: "interrupted"}`
  *   per open host call of the named nodes; `null` when the run waits for the inbox's next message
- *   (a take of it waits with nothing unread and no reader is open), or when it is already
- *   stopping (a Stop on the inbox stands, or every current reader holds or has honored an
- *   interrupt).
+ *   (a take of it waits with nothing unread and no reader is open), when it is already stopping
+ *   (a Stop on the inbox stands, or every current reader holds or has honored an interrupt), or,
+ *   with `standing` false, when it would name no reader.
  * @throws TypeError when an argument has the wrong type.
  * @throws DeliveryRefused, in this order: `ended` once the run has a terminal result;
  *   `not_started` before its run start is complete; `unknown_inbox` when the START declares no
@@ -1598,12 +1601,14 @@ export function prepareInterrupt(
   inbox: string,
   running: readonly string[] | null = null,
   by: Author | null = null,
+  standing = true,
 ): PreparedTransition | null {
   if (!isExactly(state, RunState)) throw new YianTypeError("prepareInterrupt expects a RunState");
   if (typeof inbox !== "string") throw new YianTypeError("inbox must be a string");
   if (running !== null && (!Array.isArray(running) || running.some((nodeId) => typeof nodeId !== "string"))) {
     throw new YianTypeError("running must be null or an array of node ids");
   }
+  if (typeof standing !== "boolean") throw new YianTypeError("standing must be a boolean");
   requireDeliverable(state);
   requireDeclaredInbox(state, inbox);
   const w = state.waits;
@@ -1623,8 +1628,10 @@ export function prepareInterrupt(
   const waiting = waitingReaders(state, inbox);
   const readers = [...runningReaders, ...waiting];
   if (readers.length > 0 && readers.every(stopping)) return null;
-  const named = running === null ? waiting : readers;
-  return prepareRecord(state, new InterruptedRecord(inbox, named.filter((nodeId) => !stopping(nodeId)), { by }));
+  const named = (running === null ? waiting : readers).filter((nodeId) => !stopping(nodeId));
+  // Without a standing Stop an interrupt naming no one would change nothing.
+  if (!standing && named.length === 0) return null;
+  return prepareRecord(state, new InterruptedRecord(inbox, named, { by, standing }));
 }
 
 /**
@@ -4293,9 +4300,10 @@ function validateInboxWithdrawn(state: RunState, record: InboxWithdrawnRecord): 
  * inbox: in flight with `readsSteerInbox` (which inbox a running node opened is the engine's word,
  * bound at run time), or waiting with `node_waiting.steer_inbox` equal to it; none holding a
  * pending interrupt already; and every waiting reader of the inbox without one among them. It may
- * name none: the Stop is recorded for a reader that opens the inbox later. While a Stop stands on
- * the inbox, only the run applies one, which carries that Stop's `by`. When a host may record one
- * (the idle and already-stopping rules) is `prepareInterrupt`'s.
+ * name none: the Stop is recorded for a reader that opens the inbox later (one that leaves no Stop
+ * names at least one, as the record holds). While a Stop stands on the inbox, only the run applies
+ * one, which carries that Stop's `by`. When a host may record one (the idle and already-stopping
+ * rules) is `prepareInterrupt`'s.
  */
 function validateInterrupted(state: RunState, record: InterruptedRecord): void {
   const { inbox, nodes } = record;

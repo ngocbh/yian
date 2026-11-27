@@ -970,7 +970,7 @@ test.each<[string, BeforeToolCall | null]>([
   const model = new ScriptedModel([...turns, textReply("done")], CONFIG);
   let toolset = new ToolSet(hostTools([]));
   if (hook !== null) toolset = toolset.withGate(hook);
-  const steerInbox = { inbox: "m", queuedBesidesActions: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => null, onSend: () => () => {} };
+  const steerInbox = { inbox: "m", queuedBesidesActions: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => null, interruptedSince: () => null, onSend: () => () => {} };
   const output = await direct(model, toolset.forRun("r"), ["lookup", "team"], { signal: node.signal, steerInbox });
   expect((output as { value: unknown }).value).toBe("done");
   expect([node.live.size, interrupt.live.size]).toEqual([0, 0]);
@@ -1569,6 +1569,39 @@ test.each([false, true])("an interrupt after a hold's answer, before its later c
   expect(results.slice(-3)).toEqual([["c2", "approved"], ["c4", "skipped"], ["c5", "skipped"]]);
 });
 
+test.each(["later", "again"])(
+  "a hold's answer and an interrupt that land while the agent's office is down skip the later call (%s), across a crash at any record of the resume",
+  async (name) => {
+    // [later h] [<name> L]: the run is cut at node_waiting, so the agent is in flight in the log,
+    // and h is answered and the agent interrupted while the run is down.
+    const replies = replying(["later", "h"], [name, "L"]);
+    const flow = await flowOf(NOTED);
+    const run = (log: string, ran: string[]) => gated(notedOptions(log, ran, replies().slice(modelCalls(log))), holding("h").hook);
+    const uncut = freshLog();
+    await runFlow(flow, {}, run(uncut, []));
+    const waited = readRunLog(uncut).findIndex(({ kind }) => kind === "node_waiting");
+    /** The life cut at node_waiting, answered and interrupted while down, then its resume cut at record `k` when given. */
+    const down = async (k: number | null) => {
+      const log = freshLog();
+      const ran: string[] = [];
+      await crashAfter(waited, () => runFlow(flow, {}, run(log, ran)));
+      await complete(log, heldId(0), { output: "yes" }, { env });
+      await interrupt(log, "m", { env });
+      const delivered = readRunLog(log).length;
+      if (k !== null) await crashAfter(k, () => advance(run(log, ran)));
+      const done = await advance(run(log, ran));
+      expect(done.status, done.failure?.message).toBe("succeeded");
+      return { log, ran, delivered };
+    };
+    const whole = await down(null);
+    for (let k = whole.delivered; k < readRunLog(whole.log).length; k++) {
+      const { log, ran } = await down(k);
+      const results = stepsOf(log).flatMap((step) => (step["kind"] === "tool_result" ? [[step["call_id"], step["closed"] ?? step["output"]]] : []));
+      expect([ran, results], `cut at ${k}`).toEqual([[], [["ch", "yes"], ["cL", "skipped"]]]);
+    }
+  },
+);
+
 test("a later call whose check faults waits with the others, and is checked again once the hold is answered", async () => {
   let checks = 0;
   const bad = new FunctionTool({
@@ -1831,7 +1864,7 @@ test.each<[string, "hold" | "run"]>([
     return written.length;
   };
   const steps = new NodeSteps(1, [], record, [], undefined, true, { currentCalls: () => current });
-  const steerInbox = { inbox: "m", queuedBesidesActions: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => 7, onSend: () => () => {} };
+  const steerInbox = { inbox: "m", queuedBesidesActions: () => false, read: () => null, interrupt: interrupt.signal, interruptedBy: () => 7, interruptedSince: () => 7, onSend: () => () => {} };
   const toolset = new ToolSet({ lookup }).withGate(holding("h").hook).forRun("r");
   const model = new ScriptedModel([callReply(["lookup", { q: "h" }, "ch"], ["lookup", { q: "x" }, "cx"])], CONFIG);
   expect(await direct(model, toolset, ["lookup"], { steps, steerInbox })).toEqual(new Interrupted(7));

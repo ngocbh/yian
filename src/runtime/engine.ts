@@ -316,6 +316,17 @@ export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransi
   }
 }
 
+/** Return the seq `SteerInbox.interruptedSince` gives node `nodeId`; `null` when it holds no interrupt. */
+function interruptedSince(state: RunState, nodeId: string): number | null {
+  const by = state.waits.interrupts.get(nodeId);
+  const stop = state.waits._appliedStops.get(nodeId);
+  if (by === undefined || stop === undefined) return by ?? null;
+  // The evaluation the Stop was applied in took it as it opened the inbox, before it could start a
+  // call, so it counts as one that began with the interrupt even when it began before the Stop.
+  const began = [...(state.nodeStartSeqs.get(nodeId) ?? []), ...(state.nodeWakeSeqs.get(nodeId) ?? [])].filter((seq) => seq < by);
+  return Math.min(stop, Math.max(...began) - 1);
+}
+
 /** The node's calls as its evaluation sees them, each answer a copy the state doesn't hold. */
 function callViews(state: RunState, nodeId: string): CallView[] {
   return nodeCalls(state.waits, nodeId).map((call) => {
@@ -832,6 +843,7 @@ export class FlowEngine {
         inbox,
         interrupt: controller.signal,
         interruptedBy: () => state.waits.interrupts.get(nodeId) ?? null,
+        interruptedSince: () => interruptedSince(state, nodeId),
         onSend: (listener) => {
           listeners.add(listener);
           return () => void listeners.delete(listener);

@@ -892,7 +892,7 @@ async function replayHeldCalls(turn: ToolTurn, holds: ReplyHolds): Promise<boole
       // An interrupt skipped the calls from here on, live or as it was honored; a cut can land
       // among the skips, so the later calls without one are skipped now.
       if (turn.steps.recordedResult(turn.n, call.id)?.closed === "skipped") return skipFrom(turn, index + 1);
-      const runner = laterRunner(turn, holds, by);
+      const runner = laterRunner(turn, holds, turn.ctx.steerInbox?.interruptedSince() ?? null);
       if (runner !== null) return await replayCalls(turn, { from: index, answer: holds.decidedAt!, runner });
       if (by !== null) return skipFrom(turn, index);
       return await runToolCalls(turn, { from: index, attemptSince: holds.decidedAt });
@@ -1039,11 +1039,12 @@ function replyHolds(turn: ToolTurn): ReplyHolds {
  * checked again, the hook not asked again (the release covers it), its attempt the evaluations
  * since its release (`checkCall`). A call no evaluation can have started yet runs, or is skipped
  * with a host interrupt pending, read on the live signal, which a replay's walk doesn't read:
- * this evaluation is the first after its release, or each one after it began with the interrupt
- * pending, which skips the call at once. One an earlier evaluation after its release may have
- * started is sent again, whatever the interrupt, when its tool is resumable, else closed
- * `crashed`, its outcome unknown. The calls start before any skip or closer is written, so no
- * record of this start comes before a call it must start: a crash at one finds them started.
+ * this evaluation is the first after its release, or each one after it took the interrupt before
+ * it could start a call (`SteerInbox.interruptedSince`), which skips the call at once. One an
+ * earlier evaluation after its release may have started is sent again, whatever the interrupt,
+ * when its tool is resumable, else closed `crashed`, its outcome unknown. The calls start before
+ * any skip or closer is written, so no record of this start comes before a call it must start: a
+ * crash at one finds them started.
  *
  * @returns The text the model reads for each call, and whether it is an error, by index; none for
  *   a call whose tool pended, or whose flow is to grow, which registers it again.
@@ -1056,7 +1057,7 @@ async function runReleased(turn: ToolTurn, holds: ReplyHolds): Promise<ReadonlyM
     ([index]) => views.find((each) => each.callId === agentCallId(turn, index))?.state === "released",
   );
   if (members.length === 0) return texts;
-  const by = turn.ctx.steerInbox?.interruptedBy() ?? null;
+  const by = turn.ctx.steerInbox?.interruptedSince() ?? null;
   /** Whether no evaluation can have started the call `released` released. */
   const fresh = (released: number) => {
     const since = evaluationsSince(turn, released);
@@ -1107,7 +1108,8 @@ async function runReleased(turn: ToolTurn, holds: ReplyHolds): Promise<ReadonlyM
  * before the evaluation began, and settled after (`NodeSteps.settledAt`). A hold the host answered
  * was past for each of them; one it released only for an evaluation that had or wrote its run's
  * record. A skip's writer took the interrupt there, so it got past nothing.
- * One that began with the pending interrupt skipped them instead.
+ * One that took the interrupt before it could start a call (after `by`, the seq
+ * `SteerInbox.interruptedSince` gives) skipped them instead.
  */
 function laterRunner(turn: ToolTurn, holds: ReplyHolds, by: number | null): number | null {
   const answer = holds.decidedAt;

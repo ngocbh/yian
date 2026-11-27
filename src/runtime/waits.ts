@@ -132,7 +132,7 @@ export interface WaitingNode {
 
 /** A remembered Stop on an inbox. */
 export interface StopState {
-  /** The seq of the latest `interrupted` record on the inbox. */
+  /** The seq of the host's `interrupted` record that left it, which the records the run applies keep. */
   readonly seq: number;
   /** Whether it has stopped an agent: an `interrupted` record on the inbox named one. */
   readonly stopped: boolean;
@@ -188,6 +188,11 @@ export class WaitsState {
   readonly _honored = new Set<string>();
   /** @internal Each unsettled node an interrupt named: that interrupt's inbox, held through its honor. */
   readonly _interruptInboxes = new Map<string, string>();
+  /**
+   * @internal Each in-flight node a record the run applied for a Stop named, while it holds that
+   * interrupt: the Stop's seq (`StopState.seq`).
+   */
+  readonly _appliedStops = new Map<string, number>();
 
   /** Return the plain JSON form, each map as its `[key, value]` entries in order (`fromJSON` reads it back). */
   toJSON(): WaitsJson {
@@ -204,6 +209,7 @@ export class WaitsState {
       replies: [...this._replies],
       honored: [...this._honored],
       interruptInboxes: [...this._interruptInboxes],
+      appliedStops: [...this._appliedStops],
     };
   }
 
@@ -218,7 +224,7 @@ export class WaitsState {
     const keys = Object.keys(json);
     if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {
       throw new YianRangeError(
-        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, stops, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies, honored and interruptInboxes",
+        "waits JSON must hold exactly waiting, calls, inboxes, interrupts, stops, lastFrontier, inputsCommitted, lastWoken, pendingTakes, replies, honored, interruptInboxes and appliedStops",
       );
     }
     const w = new WaitsState();
@@ -245,6 +251,7 @@ export class WaitsState {
       if (typeof inbox !== "string") throw new YianRangeError(`waits JSON interruptInboxes ${reprText(node)} must be an inbox name`);
       w._interruptInboxes.set(node, inbox);
     }
+    for (const [node, seq] of entries(json, "appliedStops")) w._appliedStops.set(node, int(seq, `appliedStops ${reprText(node)}`));
     return w;
   }
 }
@@ -263,6 +270,7 @@ const WAITS_JSON_KEYS = [
   "replies",
   "honored",
   "interruptInboxes",
+  "appliedStops",
 ] as const;
 
 /** Return whether `value` is a plain JSON object (not an array or null). */
@@ -420,6 +428,7 @@ export interface WaitsJson {
   readonly replies: readonly (readonly [string, number])[];
   readonly honored: readonly string[];
   readonly interruptInboxes: readonly (readonly [string, string])[];
+  readonly appliedStops: readonly (readonly [string, number])[];
 }
 
 /** The prefix of a send's pool key: the START's id and a dot, then the inbox's name. */
@@ -674,6 +683,7 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
     if (inbox !== undefined) for (const seq of seqList(step["from"]) ?? []) remove(inbox.unread, seq);
   } else if (step["kind"] === "interrupted") {
     w.interrupts.delete(record.nodeId);
+    w._appliedStops.delete(record.nodeId);
     w._honored.add(record.nodeId);
   }
 }
@@ -682,12 +692,16 @@ function applyStep(w: WaitsState, seq: number, record: NodeStepRecord): void {
  * Apply `interrupted`: each named node holds a pending interrupt, and its open calls close
  * `interrupted`, a waiting node's released calls too; the scope of each of its open flow calls
  * ends. A standing record remembers the Stop on its inbox; one that isn't leaves the stops alone.
+ * One while a Stop stands is the run's, applying it for the in-flight reader that opened the inbox:
+ * the Stop keeps its seq, which that reader remembers.
  */
 function applyInterrupted(w: WaitsState, seq: number, record: InterruptedRecord): void {
   if (record.standing) {
+    const stop = w.stops.get(record.inbox);
     // Once it has stopped an agent the Stop stays so: a replayed empty record can't extend its window.
-    const stopped = (w.stops.get(record.inbox)?.stopped ?? false) || record.nodes.length > 0;
-    w.stops.set(record.inbox, { seq, stopped, by: record.by });
+    const stopped = (stop?.stopped ?? false) || record.nodes.length > 0;
+    w.stops.set(record.inbox, { seq: stop?.seq ?? seq, stopped, by: record.by });
+    if (stop !== undefined) for (const nodeId of record.nodes) if (!w.waiting.has(nodeId)) w._appliedStops.set(nodeId, stop.seq);
   }
   for (const nodeId of record.nodes) {
     w.interrupts.set(nodeId, seq);
@@ -917,6 +931,7 @@ function settle(w: WaitsState, nodeId: string): void {
   w._replies.delete(nodeId);
   w._honored.delete(nodeId);
   w._interruptInboxes.delete(nodeId);
+  w._appliedStops.delete(nodeId);
 }
 
 /** Return `nodeId`'s registered calls, in registration order. */

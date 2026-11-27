@@ -612,6 +612,14 @@ export interface SteerInbox {
   /** The seq of the `interrupted` record naming this node that it hasn't honored yet, else `null`. */
   interruptedBy(): number | null;
   /**
+   * The seq after which every start or wake of this node took the interrupt `interruptedBy` names
+   * before it could start a call; `null` when `interruptedBy` is. That is the interrupt's own seq,
+   * except for a Stop the run applied as the node opened this inbox, before it did anything else:
+   * then it is the seq of the host's record that left the Stop, or, when the evaluation it was
+   * applied in began earlier, the seq just before that evaluation's start or wake.
+   */
+  interruptedSince(): number | null;
+  /**
    * Call `listener` after each send to this inbox lands, until the returned function is called. It
    * runs inside the host's send, so it must not throw.
    */

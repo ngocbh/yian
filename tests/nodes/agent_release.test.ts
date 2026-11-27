@@ -17,8 +17,9 @@ import type { Response } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ToolResultPart } from "../../src/llm/messages.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
-import { advance, complete, interrupt, pendingCalls, release, runFlow, type RunResult } from "../../src/run.ts";
-import { NodeStepRecord, readRunLog, type RunLog, type RunRecord } from "../../src/runtime/log.ts";
+import { advance, complete, interrupt, pendingCalls, release, replayRunLog, runFlow, type RunResult } from "../../src/run.ts";
+import { InterruptedRecord, JsonlRunLog, NodeStepRecord, readRunLog, type RunLog, type RunRecord } from "../../src/runtime/log.ts";
+import { commitPrepared, prepareAppliedStop, prepareInterrupt, prepareNodeWoken } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import type { BeforeToolCall, GatedCall } from "../../src/tools/gate.ts";
@@ -416,22 +417,88 @@ test("a release and an interrupt in flight skip the call; across a crash at its 
   }
 });
 
-test("a release and an interrupt that land while the agent's office is down skip the call, which never starts", async () => {
-  const flow = await flowOf();
-  const log = freshLog();
-  const starts: Start[] = [];
-  const options = (replies: Response[]) =>
-    gated({ env, log, runId: "r", tools: hostTools(log, starts), models: serving(new ScriptedModel(replies, CONFIG)) }, () => pending());
-  const reply = callReply(["keep", { q: "h" }, "c0"]);
-  // Cut right after the hold, before its agent waits: the agent is in flight in the log.
-  await crashAfter(11, () => runFlow(flow, {}, options([reply])));
-  expect((readRunLog(log).at(-1)!.record as NodeStepRecord).step["held"]).toBe(true);
-  await release(log, heldId(0), { env });
-  await interrupt(log, "m", { env });
-  expect((await advance(options([]))).status).toBe("succeeded");
-  expect(starts).toEqual([]);
-  expect(stepsOf(log).filter((step) => step["kind"] === "tool_result").map((step) => step["closed"])).toEqual(["skipped"]);
-});
+test.each(["keep", "once"])(
+  "a release and an interrupt that land while the agent's office is down skip %s's call, which never starts, across crashes at any record of the resumes up to the honor",
+  async (name) => {
+    const flow = await flowOf();
+    /**
+     * Cut a run right after the hold, before its agent waits, so the agent is in flight in the log;
+     * release and interrupt it (in `order`) while the run is down; then cut each resume at the next
+     * of `cuts` records, and resume to the end.
+     */
+    const down = async (order: "release first" | "interrupt first", cuts: readonly number[]) => {
+      const log = freshLog();
+      const starts: Start[] = [];
+      const options = (replies: Response[]) =>
+        gated({ env, log, runId: "r", tools: hostTools(log, starts), models: serving(new ScriptedModel(replies, CONFIG)) }, () => pending());
+      await crashAfter(11, () => runFlow(flow, {}, options([callReply([name, { q: "h" }, "c0"])])));
+      expect((readRunLog(log).at(-1)!.record as NodeStepRecord).step["held"]).toBe(true);
+      if (order === "release first") await release(log, heldId(0), { env });
+      await interrupt(log, "m", { env });
+      if (order === "interrupt first") await release(log, heldId(0), { env });
+      const delivered = readRunLog(log).length;
+      for (const k of cuts) await crashAfter(k, () => advance(options([])));
+      expect((await advance(options([]))).status).toBe("succeeded");
+      return { log, starts, delivered };
+    };
+    for (const order of ["release first", "interrupt first"] as const) {
+      const whole = await down(order, []);
+      // The resume writes run_resumed, node_started, then the Stop's applied record at `applied`
+      // (the host's, naming no one, came before it), then the call's skip and the honor. The cuts
+      // after the honor are an honored interrupt's, which the interrupt tests sweep.
+      const records = readRunLog(whole.log);
+      const applied = records.findLastIndex(({ kind }) => kind === "interrupted");
+      expect([records[applied - 1]!.kind, records[applied + 1]!.kind], order).toEqual(["node_started", "node_step"]);
+      expect((records[applied + 2]!.record as NodeStepRecord).step["kind"], order).toBe("interrupted");
+      const lives = [
+        ...Array.from({ length: applied + 4 - whole.delivered }, (_, at) => [whole.delivered + at]),
+        // A cut at the applied record, then at the next resume's applied record, or its skip.
+        [applied, applied + 2],
+        [applied, applied + 3],
+        // A cut at the skip, then at the next resume's.
+        [applied + 1, applied + 3],
+      ];
+      for (const cuts of lives) {
+        const { log, starts } = await down(order, cuts);
+        const where = `${order}, cut at ${cuts.join(" then ")}`;
+        expect(starts, where).toEqual([]);
+        expect(stepsOf(log).filter((step) => step["kind"] === "tool_result").map((step) => step["closed"]), where).toEqual(["skipped"]);
+      }
+    }
+  },
+  60_000,
+);
+
+test.each(["keep", "once"])(
+  "a Stop that lands as the release's wake begins, before the agent opens its inbox, skips %s's call across a crash right after it is applied",
+  async (name) => {
+    const flow = await flowOf();
+    const log = freshLog();
+    const starts: Start[] = [];
+    const replies = [callReply([name, { q: "h" }, "c0"])];
+    const options = () =>
+      gated({ env, log, runId: "r", tools: hostTools(log, starts), models: serving(new ScriptedModel(replies.slice(modelCalls(log)), CONFIG)) }, () => pending());
+    expect((await runFlow(flow, {}, options())).status).toBe("waiting");
+    await release(log, heldId(0), { env });
+    // What a live run writes when the host's interrupt lands after the wake, before the agent opens
+    // its inbox, cut right after: the wake, the host's record naming no one (no reader is open),
+    // and the record the run applies for its Stop as the agent opens the inbox.
+    const authority = JsonlRunLog.resume(log);
+    try {
+      const state = replayRunLog(flow, authority);
+      commitPrepared(authority, state, prepareNodeWoken(state, "reply"));
+      const host = prepareInterrupt(state, "m", [])!;
+      expect((host.record as InterruptedRecord).nodes).toEqual([]);
+      commitPrepared(authority, state, host);
+      commitPrepared(authority, state, prepareAppliedStop(state, "m", "reply"));
+    } finally {
+      authority.close();
+    }
+    expect((await advance(options())).status).toBe("succeeded");
+    expect(starts).toEqual([]);
+    expect(stepsOf(log).filter((step) => step["kind"] === "tool_result").map((step) => step["closed"])).toEqual(["skipped"]);
+  },
+);
 
 test("a release that lands between its node's wake and the node reading its calls pends the call again, which then runs once", async () => {
   // [keep h1, keep h2], both held. h1's answer wakes the node; h2's release lands from NodeWoken,

@@ -1757,6 +1757,7 @@ export function interruptible(): { steerInbox: SteerInbox; interrupt: (by?: numb
       read: () => null,
       interrupt: controller.signal,
       interruptedBy: () => pending,
+      interruptedSince: () => pending,
       onSend: () => () => {},
     },
     interrupt: (by = 7) => {

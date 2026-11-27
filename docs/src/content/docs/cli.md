@@ -297,6 +297,10 @@ read. To move one into the running reply, take it back with ↑ and press Enter;
 it back and delete its line. A command such as `/model` entered during a reply runs once the reply
 and the queued lines' turn end, and a line can't be queued after it until it has run.
 
+Esc and a key typed within 50 ms of it read as Alt and that key, as a terminal sends Alt+key. Under
+tmux, an `escape-time` of 500 ms (the default before tmux 3.5) merges them before yian sees them,
+so a quick Esc then Enter queues the line: add `set -sg escape-time 10` to `~/.tmux.conf`.
+
 What you do yourself, such as choosing a model with `/model`, reaches the assistant as your action,
 signed `the user`. It starts no reply: the assistant reads it with your next message, and a
 compaction keeps who did what.

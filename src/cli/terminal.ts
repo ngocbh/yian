@@ -3,7 +3,7 @@
  * from keypresses, one widget at a time, always giving the terminal back in cooked mode.
  */
 
-import { emitKeypressEvents } from "node:readline";
+import { emitKeypressEvents, type Interface } from "node:readline";
 
 import { compareCodePoints, reprText } from "../diagnostics.ts";
 import { coerceParam } from "../nodes/binding.ts";
@@ -290,6 +290,11 @@ const PASTE_CHARS = 800;
 const PASTE_IDLE_MS = 500;
 /** The characters a paste keeps; past them the rest of it is dropped. */
 const PASTE_MAX_CHARS = 16_000_000;
+/**
+ * How long a lone Escape waits for a key to make Alt+key with. Readline's 500 ms would read a quick
+ * Esc then Enter as Alt+Enter; a terminal sends a real Alt+key, or an arrow's sequence, as one chunk.
+ */
+const ESCAPE_CODE_TIMEOUT_MS = 50;
 
 /** A paste a `LineEditor` holds as one token, `[Pasted text #<number> +<lines> lines]`. */
 export interface PastedText {
@@ -2051,7 +2056,9 @@ export class Terminal {
   #attach(): void {
     if (!this.#attached) {
       this.#attached = true;
-      emitKeypressEvents(this.#input);
+      // Readline reads only the timeout from the interface it is given (and sets two flags on it), so
+      // a plain object sets the timeout without an interface over the input.
+      emitKeypressEvents(this.#input, { escapeCodeTimeout: ESCAPE_CODE_TIMEOUT_MS } as unknown as Interface);
       this.#input.on("keypress", this.#onKeypress);
       this.#input.on("end", this.#onEnd);
       this.#input.on("error", this.#onEnd);

@@ -727,6 +727,36 @@ async function altEnterAndCtrlXEnterQueueTheLiveBoxsLineAndUpOnItsFirstRowRecall
   watch.abort();
 }
 
+async function anEscapeThenEnterAMomentLaterAreTwoKeysWhileAltEnterInOneChunkQueues(): Promise<void> {
+  const { input, terminal } = setup({ tty: true });
+  const editor = new LineEditor({ columns: () => 30, hint: "", queued: () => ["held"] });
+  const actions: unknown[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    (key) => actions.push(key),
+    (key) => {
+      const action = editor.key(key);
+      if (action !== null) actions.push(action);
+      if (action !== null && "value" in action) editor.set("");
+      return true;
+    },
+  );
+  // Esc to stop the reply, then Enter 100 ms later, as a person types them: two keys.
+  input.write(`one${ESCAPE}`);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  input.write(ENTER);
+  await tick();
+  // A terminal sends Alt+Enter as one chunk.
+  input.write(`two${ESCAPE}${ENTER}`);
+  await tick();
+  // An arrow's escape sequence is still the arrow: Up on the first row recalls.
+  input.write(UP);
+  await tick();
+  assert.deepEqual(actions, [{ escape: true }, { value: "one" }, { value: "two", queue: true }, { recall: true }]);
+  watch.abort();
+}
+
 async function aFramedPromptDrawsTheQueuedLinesAboveItsBoxAndAltEnterEntersItsLine(): Promise<void> {
   const { input, terminal, view } = setup({ columns: 60 });
   const editor = new LineEditor({ columns: () => 60, hint: HINT, queued: () => ["fix the tests", "a\nb"] });
@@ -4402,6 +4432,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
     aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile,
   "Alt+Enter and Ctrl-X Enter queue the live box's line, and Up on its first row recalls":
     altEnterAndCtrlXEnterQueueTheLiveBoxsLineAndUpOnItsFirstRowRecalls,
+  "an Escape then Enter a moment later are two keys, while Alt+Enter in one chunk queues":
+    anEscapeThenEnterAMomentLaterAreTwoKeysWhileAltEnterInOneChunkQueues,
   "a framed prompt draws the queued lines above its box, and Alt+Enter enters its line":
     aFramedPromptDrawsTheQueuedLinesAboveItsBoxAndAltEnterEntersItsLine,
   "a line prompt after a withdrawn card takes keys at once":

@@ -177,7 +177,7 @@ const TEXT_REPLY = "{format: yian.message.v1, role: assistant, parts: [{type: te
 const MODEL = (entry: string) => `${RUN}host: {models: {n: {agent: [${entry}]}}}\n`;
 const AT = "host.models.n.agent[0]";
 const SENDS =
-  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after? | sends?}, {interrupt, after?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
+  "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after? | sends?}, {interrupt, after?, standing: false?}, {complete, output | error} or {release, note?, after?}, each with an optional `by` mapping; " +
   "`hold: true` marks an item sent while the run waits that isn't followed by an advance";
 const COUNTS = "`host.sends[0].after` counts must be ints from 1, `chunk` from 0";
 const STOP_COUNTS = "`host.stop.a.after` counts must be ints from 1, `chunk` from 0";
@@ -390,6 +390,7 @@ describe("checkCase", () => {
       "[{interrupt: m, after: 1}]",
       "[{interrupt: m, inbox: m}]",
       "[{interrupt: m, down: true}]",
+      "[{interrupt: m, standing: true}]",
       "[{withdraw: 1}]",
       "[{withdraw: m, down: true}]",
       "[{withdraw: m, after: 1}]",
@@ -642,6 +643,7 @@ describe("checkCase", () => {
     MODEL("{chunks: [{text: a}], raise: {class: X, message: m, status: 503}}"),
     `${RUN}host: {models: {n: {compose: [], structured_retry: []}}}`,
     `${RUN}host: {sends: [{interrupt: m, after: {node: chat, model_call: 1, chunk: 2}}, {interrupt: m}]}`,
+    `${RUN}host: {sends: [{interrupt: m, standing: false, after: {node: chat, model_call: 1}}, {interrupt: m, standing: false}]}`,
     `${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, model_call: 1, chunk: 2}}, {close: m}]}`,
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, sends: [{inbox: m, event: a, down: true}]}`,
     `${RUN}host: {sends: [{interrupt: m, by: {kind: user, name: Ada}}, {complete: r/a, output: ok, by: {kind: agent, name: o}, hold: true}]}`,

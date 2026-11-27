@@ -2075,8 +2075,8 @@ describe("interrupt", () => {
       expect(await call(tools, "interrupt", { run: "r1", inbox: "m" })).toMatchObject({
         status: "waiting",
         interrupted:
-          "nothing to interrupt: the run waits for a message on inbox 'm', or is already stopping " +
-          "(took back 0 messages)",
+          "nothing to interrupt: the run has no step reading inbox 'm' now, or is already stopping; its next " +
+          "step runs; flows_stop ends it (took back 0 messages)",
         taken_back: [],
       });
       expect(children.status("r1").seq).toBe(seen);
@@ -2101,34 +2101,40 @@ describe("interrupt", () => {
   );
 
   test(
-    "with no agent reading the inbox now, it says the next turn on it stops at once",
+    "with no agent reading the inbox now, it records nothing, and the next turn on it runs",
     async () => {
       const children = childRuns();
       await chat(children).start(await flow(BUSY_THEN_TAKE), {});
       const cut = await call(childFlows(chat(children)), "interrupt", { run: "r1", inbox: "m" });
-      expect(cut["interrupted"]).toBe("nothing to stop now; the next turn on 'm' stops at once (took back 0 messages)");
+      expect(cut["interrupted"]).toBe(
+        "nothing to interrupt: the run has no step reading inbox 'm' now, or is already stopping; its next step runs; flows_stop ends it (took back 0 messages)",
+      );
       openGate();
-      expect((await settled(children, "r1")).waits).toMatchObject([{ tool: "take", inbox: "m" }]);
+      const after = await settled(children, "r1");
+      expect(after.waits).toMatchObject([{ tool: "take", inbox: "m" }]);
+      expect(readRunLog(after.log).some(({ record }) => record instanceof InterruptedRecord)).toBe(false);
     },
     TIMEOUT,
   );
 
   test(
-    "a Stop left for the next turn says how many queued messages from others that turn may use up",
+    "another sender's message the next turn has taken is answered: no Stop is left for that turn",
     async () => {
-      const model = steerer(textReply("never"));
+      const model = steerer(textReply("heard Ada"));
       const { children, tools, seen } = await steered(model);
       // Ada's send from another process, which nothing nudges the driver for.
       const log = children.status("r1").log;
       await send(log, "m", { role: "user", author: "Ada", parts: text("from Ada") }, { env, codeRoot: root, by: ADA });
+      const records = readRunLog(log).length;
       const cut = await call(tools, "interrupt", { run: "r1", inbox: "m" });
       expect(cut["interrupted"]).toBe(
-        "nothing to stop now; the next turn on 'm' stops at once, and may use up 1 queued message from " +
-          "others unanswered (took back 0 messages)",
+        "nothing to interrupt: the run has no step reading inbox 'm' now, or is already stopping; its next step runs; flows_stop ends it (took back 0 messages)",
       );
-      // The turn that takes Ada's message stops before its model call.
+      expect(readRunLog(log)).toHaveLength(records);
+      children.nudge("r1");
       expect(await settled(children, "r1", seen)).toMatchObject({ status: "waiting" });
-      expect(model.requests).toHaveLength(0);
+      expect(model.requests).toHaveLength(1);
+      expect(JSON.stringify(model.requests[0]!.messages.map((message) => message.toJSON()))).toContain("from Ada");
     },
     TIMEOUT,
   );

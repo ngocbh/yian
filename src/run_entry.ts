@@ -80,6 +80,7 @@ export {
   InboxRef,
   inspectRun,
   interrupt,
+  type InterruptOptions,
   type InterruptResult,
   iterRunRecords,
   iterRunRecordsBackwards,

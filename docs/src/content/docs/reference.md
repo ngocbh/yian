@@ -243,12 +243,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":37,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":38,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `37`. yian reads only this one. A log of schema 10 to 36 reads as `run log schema N predates schema 37 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `38`. yian reads only this one. A log of schema 10 to 37 reads as `run log schema N predates schema 38 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |
@@ -274,7 +274,7 @@ compact JSON with its keys sorted:
 | `node_failed` | A node failed, with its failure. The run is over, unless the node is inside an AGENT's flow call (`call_id`, `scope`): that call fails and its scope's other nodes end |
 | `inbox_closed` | An inbox was closed; it takes no more messages |
 | `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox; `events` lists them. With `by`, they were sent with that `by`. `chosen: true` when the host named them, else they were all the unread ones |
-| `interrupted` | The agents reading an inbox were interrupted |
+| `interrupted` | The agents reading an inbox were interrupted. `standing: false` when it left no Stop for an agent that opens the inbox later |
 
 A record a host call made holds `by` when the call passed one: who made it, as
 `{kind, name, run?, node?}`, its kind `user` (a person), `agent`, `tool`, `host` or `run`. These are

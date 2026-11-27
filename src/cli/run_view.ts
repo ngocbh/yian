@@ -995,16 +995,11 @@ export class RunView {
     if (back.length > 0) this.#editor.set(joinDrafts([...back, this.#editor.draft()]));
     const returned = back.length === 0 ? "" : `; ${counted(back.length, "message")} back in the box`;
     if (!cut.landed) return { text: `${cut.status.note ?? PRESSING.interrupt.not}${returned}`, style: "yellow" };
-    // Nothing was recorded: no reader to cut, and no Stop stands.
+    // Nothing was recorded: no step reads the inbox now, or one is already stopping.
     if (cut.seq === null) {
-      const text = `nothing to interrupt: the run waits for a message on ${inbox}, or is already stopping${returned}`;
-      return { text, style: "dim" };
+      return { text: `nothing to interrupt on ${inbox} now: its next step runs; /stop ends it${returned}`, style: "dim" };
     }
-    if (cut.nodes.length > 0) return { text: `interrupted ${cut.nodes.join(", ")}${returned}`, style: "dim" };
-    const others = counted(cut.queued, "queued message");
-    const queued = cut.queued === 0 ? "" : `, and may use up ${others} from others unanswered`;
-    const text = `nothing to stop now; the next turn on ${inbox} stops at once${queued}${returned}`;
-    return { text, style: "yellow" };
+    return { text: `interrupted ${cut.nodes.join(", ")}${returned}`, style: "dim" };
   }
 
   /** What the view says, on at most `SAID_ROWS` rows `columns` wide, sanitized, each line wrapped, the last row cut to fit. */

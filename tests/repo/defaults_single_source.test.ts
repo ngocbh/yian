@@ -104,6 +104,7 @@ const ALLOWED: Record<string, string> = {
   "cli/terminal.ts: PASTE_CHARS": "characters of a paste the input box shows as text, not a token",
   "cli/terminal.ts: PASTE_IDLE_MS": "pause after which Escape or Ctrl-C can end a paste",
   "cli/terminal.ts: PASTE_MAX_CHARS": "characters a paste keeps, against one that never ends",
+  "cli/terminal.ts: ESCAPE_CODE_TIMEOUT_MS": "how long a lone Escape waits for a key to make Alt+key with",
   "cli/chat.ts: LIST_TICK_MS": "how often the chat's run list is drawn again",
   "cli/chat.ts: VIEW_TICK_MS": "how often the chat's run view reads its run's log again",
   "cli/chat_view.ts: SPIN_MS": "the chat's spinner frame interval",

@@ -1,0 +1,160 @@
+# Two takes wait, each on its own inbox. A send to each, then one `advance` wakes both, oldest
+# waiter first. A resume cut after the first wake runs that take again before it wakes the other,
+# so the takes finish in the same order (the crash sweep checks this).
+kind: run
+flow: |
+  id: f
+  name: f
+  input:
+    left: !Inbox(str)
+    right: !Inbox(str)
+  nodes:
+    a:
+      kind: call
+      call: take
+      input:
+        from: ${input.left}
+    b:
+      kind: call
+      call: take
+      input:
+        from: ${input.right}
+  output:
+    a: ${a.output.events}
+    b: ${b.output.events}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {inbox: right, event: r1, hold: true}
+  - {inbox: left, event: l1}
+expect:
+  output:
+    status: succeeded
+    output: {a: [l1], b: [r1]}
+  trace:
+  - - run_started
+    - null
+    - {num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value:
+        left: {inbox: left}
+        right: {inbox: right}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, a]
+  - - node_waiting
+    - a
+    - call_ids: [r1/a]
+      waits:
+      - {call_id: r1/a, inbox: left, mode: one, tool: take}
+  - [node_started, b]
+  - - node_waiting
+    - b
+    - call_ids: [r1/b]
+      waits:
+      - {call_id: r1/b, inbox: right, mode: one, tool: take}
+  - - run_waiting
+    - null
+    - node_ids: [a, b]
+  - - pool_commit
+    - __start__
+    - {key: __start__.right, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: __start__.left, value: l1}
+  - [node_woken, a]
+  - - pool_commit
+    - a
+    - closed: false
+      events: [14]
+      inbox: left
+  - - node_succeeded
+    - a
+    - {commit: 16}
+  - [node_woken, b]
+  - - pool_commit
+    - b
+    - closed: false
+      events: [13]
+      inbox: right
+  - - node_succeeded
+    - b
+    - {commit: 19}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - value:
+        a: [l1]
+        b: [r1]
+  - - node_succeeded
+    - __end__
+    - {commit: 22}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - {node_id: __start__}
+  - - NodeSucceeded
+    - node_id: __start__
+      output:
+        left: {inbox: left}
+        right: {inbox: right}
+      interrupted: false
+  - - NodeStarted
+    - {node_id: a}
+  - - NodeWaiting
+    - node_id: a
+      call_ids: [r1/a]
+  - - NodeStarted
+    - {node_id: b}
+  - - NodeWaiting
+    - node_id: b
+      call_ids: [r1/b]
+  - - RunWaiting
+    - node_ids: [a, b]
+  - - NodeWoken
+    - node_id: a
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: a
+      output:
+        closed: false
+        events: [l1]
+      interrupted: false
+  - - NodeWoken
+    - node_id: b
+      timed_out: []
+  - - NodeSucceeded
+    - node_id: b
+      output:
+        closed: false
+        events: [r1]
+      interrupted: false
+  - - NodeStarted
+    - {node_id: __end__}
+  - - NodeSucceeded
+    - node_id: __end__
+      output:
+        a: [l1]
+        b: [r1]
+      interrupted: false
+  - - RunSucceeded
+    - output:
+        a: [l1]
+        b: [r1]

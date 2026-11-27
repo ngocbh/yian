@@ -365,12 +365,15 @@ test("a node failure while another node waits closes its call", async () => {
   expect(run.state.result).toBeInstanceOf(RunFailed);
 });
 
-/** A fresh engine over `records` replayed into a new state of `flow`, with `RunResumed` first when `resume`. */
-function reopened(flow: CompiledFlow, records: ReturnType<MemoryRunLog["records"]>, resume: boolean): FlowEngine {
+/**
+ * A fresh engine with `numWorkers` over `records` replayed into a new state of `flow`, with
+ * `RunResumed` first when `resume`.
+ */
+function reopened(flow: CompiledFlow, records: ReturnType<MemoryRunLog["records"]>, resume: boolean, numWorkers = 0): FlowEngine {
   const state = replayRecords(new RunState(copyGraph(flow)), records, { growBuilder: noGrowth });
   const log = MemoryRunLog.fromRecords(records, { clock: FIXED_CLOCK });
-  if (resume) commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
-  return new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers: 0 });
+  if (resume) commitPrepared(log, state, prepareRunResumed(state, { numWorkers }));
+  return new FlowEngine(state, log, { growBuilder: noGrowth, numWorkers });
 }
 
 test("a waiting run moved again records no second run_waiting", async () => {
@@ -400,6 +403,49 @@ test("a restart reuses the host call its node registered before the crash", asyn
   expect(waiting.callIds).toEqual([ask.callId]);
 });
 
+test("a resume cut after the first of two wakes finishes the retried take first, as the uncut run did", async () => {
+  const flow = pairFlow(new FakeTake("a", "l"), new FakeTake("b", "r"), ["l", "r"]);
+  const first = inboxEngine(flow);
+  await first.run();
+  commitPrepared(first.log, first.state, prepareSend(first.state, "r", "r1"));
+  commitPrepared(first.log, first.state, prepareSend(first.state, "l", "l1"));
+  const uncut = reopened(flow, first.log.records(), false);
+  await uncut.run();
+  const succeeded = (run: FlowEngine) =>
+    run.log.records().flatMap(({ record }) => (record instanceof NodeSucceededRecord ? [record.nodeId] : []));
+  expect(succeeded(uncut)).toEqual([START_ID, "a", "b", END_ID]);
+  const records = uncut.log.records();
+  const run = reopened(flow, records.slice(0, records.findIndex(({ record }) => record instanceof NodeWokenRecord) + 1), true);
+  await run.run();
+  expect(succeeded(run)).toEqual([START_ID, "a", "b", END_ID]);
+});
+
+test.each([1, 2])("a resume starts its retries before a waiting node wakes (%p workers)", async (numWorkers) => {
+  const flow = inboxFlow(
+    ["r"],
+    [new FuncNode("x", () => 1), new FuncNode("y", () => 2), new FakeTake("b", "r")],
+    [[START_ID, "x"], [START_ID, "y"], [START_ID, "b"], ["x", END_ID], ["y", END_ID], ["b", END_ID]],
+  );
+  // `x` and `y` run while `b` waits, and a send makes `b` wakeable before the crash.
+  const { state, log } = inboxEngine(flow);
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  commitPrepared(log, state, preparePoolCommit(state, START_ID, { r: new InboxRef("r") }));
+  commitPrepared(log, state, prepareNodeSucceeded(state, START_ID));
+  for (const nodeId of ["x", "y", "b"]) commitPrepared(log, state, prepareNodeStarted(state, nodeId));
+  const callId = toolCallId(RUN_ID, "b");
+  commitPrepared(log, state, prepareNodeWaiting(state, "b", { callIds: [callId], waits: [{ callId, tool: "take", inbox: "r", mode: "one", deadline: null }] }));
+  commitPrepared(log, state, prepareSend(state, "r", "r1"));
+  const run = reopened(flow, log.records(), true, numWorkers);
+  await run.run();
+  const records = run.log.records().map((entry) => entry.record);
+  const resumed = records.slice(records.findIndex((record) => record instanceof RunResumedRecord));
+  const order = resumed.flatMap((record) =>
+    record instanceof NodeStartedRecord || record instanceof NodeWokenRecord ? [`${record.constructor.name} ${record.nodeId}`] : [],
+  );
+  expect(order).toEqual(["NodeStartedRecord x", "NodeStartedRecord y", "NodeWokenRecord b", `NodeStartedRecord ${END_ID}`]);
+  expect(run.state.result).toBeInstanceOf(RunSucceeded);
+});
+
 test("a waiting take wakes for events a dropped take commit freed", async () => {
   const first = new FakeTake("first", "m");
   const second = new FakeTake("second", "m");
@@ -421,9 +467,13 @@ test("a waiting take wakes for events a dropped take commit freed", async () => 
   await run.run();
   const records = run.log.records().map((entry) => entry.record);
   const resumedAt = records.findIndex((record) => record instanceof RunResumedRecord);
-  expect(records.slice(resumedAt + 1, resumedAt + 2)).toEqual([expect.any(NodeWokenRecord)]);
-  expect((records[resumedAt + 1] as NodeWokenRecord).nodeId).toBe("second");
+  // The resume gives the freed event to the take that waited for it; the retried take starts
+  // first, finds nothing left and waits, and then the waiting one wakes.
+  expect(records.slice(resumedAt + 1, resumedAt + 4).map((record) => [record.constructor, (record as NodeWokenRecord).nodeId])).toEqual([
+    [NodeStartedRecord, "first"],
+    [NodeWaitingRecord, "first"],
+    [NodeWokenRecord, "second"],
+  ]);
   expect(run.state.pool.get("second")).toEqual({ events: ["hi"], closed: false });
-  // The retried take finds nothing left and waits.
   expect([...run.state.waits.waiting.keys()]).toEqual(["first"]);
 });

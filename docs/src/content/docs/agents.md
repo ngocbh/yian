@@ -596,7 +596,9 @@ output: ${worker.output :- "(stopped)"}
   watches [`ctx.steered`](/embedding/#tools-and-skills), which is already aborted when the steer
   came during the model call. An action, or a message to a queue, doesn't abort it.
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
-  message in a template. The template reads only `${event}`.
+  message in a template. The template reads only `${event}`. A `Message` with an `author` keeps it:
+  the model reads the rendered text inside that author's
+  [label](/embedding/#label-speakers-for-an-outside-agent), as it reads an unrendered one.
 - **A queue.** A message meant for the next turn goes to a second inbox, which only the `take`
   that starts a turn reads; see [A queue the steers don't read](/inboxes/#a-queue-the-steers-dont-read).
 - **Actions.** A `Message` whose parts are all `action` parts records something a person did with

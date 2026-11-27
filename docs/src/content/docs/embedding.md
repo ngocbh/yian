@@ -595,14 +595,22 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   - A child's label is `<flow> r<n>`: its flow's id with accents dropped, each run of characters
     outside `A-Za-z0-9._-` made one `_`, cut at 40 characters (`review_flow r1`). Pass `label` to
     `start` to give it one of your own, such as an instrument's name (`shell 1`).
-  - A label reads as it looks: one holding a control, format or invisible character, or
-    whitespace at an end, doubled or other than a space, is refused. Labels are compared after
-    NFKC normalization and case folding, so `ＡＤＡ` reads as `Ada`.
+  - A label reads as it looks. It is refused if it holds a control, format or invisible
+    character, whitespace at an end, doubled or other than a space, a dot above an `i` or `j`, or
+    the same mark twice on one letter.
+  - Labels are compared after NFKC normalization and case folding, so `ＡＤＡ` reads as `Ada`. They
+    are also compared by their skeletons in Unicode's confusables (UTS #39, version 18.0.0): as
+    written, case-folded and upper-cased. So `уіаn-сhаt` in Cyrillic reads as `yian-chat`, and
+    `ΚΙΜ` in Greek as `Kim`.
+  - The check errs toward refusing: `AI` reads as `Al`, `Kim` as `Kirn` and Greek `Αννα` as
+    `Anna`. The error names the label it reads as.
+  - A lookalike in the other case gets through: `Ьob` reads as `bob` but not as `Bob`, and `ſiona`
+    as `fiona` but not as `Fiona`. Comparing across cases would also refuse `Ian` beside `Lan`.
   - No label may read as `yian` or `office`, a relay (the word `via`), or a child's (ending in
-    `r<n>`). No person may read as the owner or another person. A label you give a child also may
-    not read as its owner's, a person's, a label above it in the tree, or a sibling's that still
-    runs. An owner of a run the driver started has that run's label.
-  - Lookalikes from other scripts (`уіаn-сhаt` in Cyrillic) aren't caught: vet the names you pass.
+    `r<n>`). This holds for lookalikes too, so `Bob, ∨ia Ada` and `greet г3` are refused.
+  - No person may read as the owner or another person. A label you give a child also may not read
+    as its owner's, a person's, a label above it in the tree, or a sibling's that still runs. An
+    owner of a run the driver started has that run's label.
 - **Parent.** A child records `parent: {runId, node, inbox, label}`: the owner's run, the node whose
   call started it (`start`'s `node`, which the group's `start` passes), the owner's `inbox` (none by
   default) and its own label.

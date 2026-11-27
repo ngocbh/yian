@@ -2499,17 +2499,48 @@ describe("labels", () => {
     for (const loose of [" yian-chat", "yian-chat ", "yian  chat", "yian\u2028chat"]) {
       expect(() => owner(loose)).toThrow("has whitespace at an end, doubled, or other than a space");
     }
-    for (const reserved of ["yian", "Office", "\uff59\uff49\uff41\uff4e"]) {
+    // A dot above an i or j, or the same mark twice on one letter, doesn't show.
+    for (const dotted of ["yi\u0307an", "Oli\u0307via", "\u0131\u0307an", "j\u0323\u0307o"]) {
+      expect(() => owner(dotted)).toThrow("puts a dot above an i or j");
+    }
+    for (const twice of ["Zo\u00eb\u0308", "Ren\u00e9\u0301", "Ane\u0301\u0300\u0301"]) {
+      expect(() => owner("yian-chat", [twice])).toThrow("holds the same mark twice on one letter");
+    }
+    expect(owner("yian-chat", ["\u0130pek", "Zo\u00eb", "Ane\u0301\u0300"]).people).toHaveLength(3);
+    for (const reserved of ["yian", "Office", "\uff59\uff49\uff41\uff4e", "o\u017f\u017fice"]) {
       expect(() => owner(reserved)).toThrow("is reserved: nothing is signed yian or office");
     }
-    const relays = ["the user, via yian-chat", "Ada via Bob", "Ada (via Bob)", "Ada\u201a via Bob", "Ada, v\u0456a B"];
+    const relays = [
+      ...["the user, via yian-chat", "Ada via Bob", "Ada (via Bob)", "Ada\u201a via Bob", "Ada, v\u0456a B"],
+      ...["Bob, \u2228ia Ada", "Bob, \u13d9ia Ada", "Bob, v\ua647a Ada", "Bob, vi\u237a Ada"],
+    ];
     for (const relay of relays) expect(() => owner(relay)).toThrow("reads as a relay (<person>, via <employee>)");
-    const forms = ["review r1", "Review_Flow R2", "gr\u0435et r1", "greet r\u0661", "greet \uff52\uff11"];
+    const forms = [
+      ...["review r1", "Review_Flow R2", "gr\u0435et r1", "greet r\u0661", "greet \uff52\uff11"],
+      ...["greet \u04333", "greet rl", "greet r1O"],
+    ];
     for (const child of forms) expect(() => owner(child)).toThrow("reads as a child run's (<flow> r<n>)");
     expect(() => owner("yian-chat", ["greet r3"])).toThrow("a person's label 'greet r3' reads as a child run's");
+    expect(() => owner("yian-chat", ["Bob, \u13d9ia Ada"])).toThrow("'Bob, \u13d9ia Ada' reads as a relay");
     // No person reads as the owner or as another person, by NFKC and full case folding.
     expect(() => owner("the user", ["The User"])).toThrow("a person's label 'The User' reads as the owner's");
     expect(() => owner("yian-chat", ["Strau\u00df", "STRAUSS"])).toThrow("a person's label 'STRAUSS' reads as");
+    // Nor by Unicode's confusables as written (Cyrillic capital I as l), or case-folded (Greek upsilon as u).
+    expect(() => owner("yian-chat", ["lena", "\u0406ena"])).toThrow("'\u0406ena' reads as the person 'lena'");
+    expect(() => owner("yian-chat", ["Lucy", "l\u03c5cy"])).toThrow("'l\u03c5cy' reads as the person 'Lucy'");
+    expect(owner("yian-chat", ["Ian", "Lan", "Ada", "\u0391\u0394\u0391"]).people).toHaveLength(4);
+    // The check errs toward refusing, and a lookalike reads as a label of its own case.
+    const alike = [
+      ...[["AI", "Al"], ["Kim", "Kirn"], ["Anna", "\u0391\u03bd\u03bd\u03b1"]],
+      ...[["bob", "\u042cob"], ["fiona", "\u017fiona"]],
+    ];
+    for (const [one, other] of alike) {
+      expect(() => owner("yian-chat", [one!, other!])).toThrow(`'${other}' reads as the person '${one}'`);
+    }
+    // Unicode's confusables read a character before NFKC does: Greek lunate sigma as c, long s as f.
+    expect(() => owner("yian-chat", ["yian-\u03f2hat"])).toThrow("'yian-\u03f2hat' reads as the owner's");
+    expect(() => owner("yian-chat", ["Chen", "\u03f9hen"])).toThrow("'\u03f9hen' reads as the person 'Chen'");
+    expect(() => owner("yian-chat", ["shell l", "shell \ufe31"])).toThrow("'shell \ufe31' reads as the person");
     expect(owner("Olivia").label).toBe("Olivia");
     const made = owner("yian-chat", ["the user"]);
     expect([made.label, made.people, made.inbox]).toEqual(["yian-chat", ["the user"], null]);
@@ -2531,7 +2562,10 @@ describe("labels", () => {
         ["the  user", "has whitespace at an end, doubled, or other than a space"],
         ["yian", "is reserved"],
         ["Ada, via yian-chat", "reads as a relay"],
+        ["Ada, \u2228ia yian-chat", "reads as a relay"],
         ["greet r9", "reads as a child run's"],
+        ["greet \u04333", "reads as a child run's"],
+        ["yi\u0307an-chat", "puts a dot above an i or j"],
       ];
       for (const [label, why] of refused) {
         await expect(owner.start(greet, { who: "a" }, { label })).rejects.toThrow(why!);
@@ -2574,6 +2608,63 @@ describe("labels", () => {
     },
     TIMEOUT,
   );
+
+  // Lookalikes by Unicode's confusables, as written, in lower case or in upper case: each looks like
+  // the owner's `yian-chat`, the person `the user`, the person `Olivia` or `Kim`, a sibling's label,
+  // or a reserved one.
+  const LOOKALIKES = {
+    Cyrillic: {
+      chat: "\u0443\u0456\u0430n-\u0441h\u0430t",
+      user: "t\u04bb\u0435 us\u0435r",
+      person: ["Olivia", "\u041elivia"],
+      sibling: ["shell 1", "\u0455h\u0435ll 1"],
+      reserved: "\u0443\u0456\u0430n",
+    },
+    Greek: {
+      chat: "\u03b3\u03b9\u03b1n-chat",
+      user: "\u03a4\u0397\u0395 user",
+      person: ["Kim", "\u039a\u0399\u039c"],
+      sibling: ["Niko", "\u039d\u0399\u039a\u039f"],
+      reserved: "\u03bfffice",
+    },
+  };
+  for (const [script, like] of Object.entries(LOOKALIKES)) {
+    test(
+      `a ${script} lookalike of another's label reads as it`,
+      async () => {
+        const children = childRuns();
+        const people = (label: string, ...labels: string[]) =>
+          children.owner({ runId: CHAT, group: "flows", label, people: labels });
+        expect(() => people(like.reserved)).toThrow("is reserved: nothing is signed yian or office");
+        expect(() => people("yian-chat", like.chat)).toThrow(`a person's label '${like.chat}' reads as the owner's`);
+        expect(() => people("yian-chat", ...like.person)).toThrow(
+          `a person's label '${like.person[1]}' reads as the person '${like.person[0]}'`,
+        );
+        const owner = chat(children);
+        const [greet, ask] = [await flow(GREET), await flow(ASK)];
+        const refused = [
+          [like.chat, "reads as its owner's"],
+          [like.user, "reads as the person 'the user'"],
+          [like.reserved, "is reserved"],
+        ];
+        for (const [label, why] of refused) {
+          const start = owner.start(greet, { who: "a" }, { label });
+          await expect(start).rejects.toThrow(`a child's label '${label}' ${why}`);
+        }
+        const first = await owner.start(greet, { who: "a" });
+        const sub = children.owner({ runId: `${CHAT}-${first.id}`, group: "flows" });
+        await expect(sub.start(greet, { who: "b" }, { label: like.chat })).rejects.toThrow(
+          `a child's label '${like.chat}' reads as 'yian-chat', a label above it`,
+        );
+        const sibling = await owner.start(ask, {}, { label: like.sibling[0] });
+        await settled(children, sibling.id);
+        await expect(owner.start(greet, { who: "c" }, { label: like.sibling[1] })).rejects.toThrow(
+          `a child's label '${like.sibling[1]}' reads as run ${sibling.id}'s, which still runs`,
+        );
+      },
+      TIMEOUT,
+    );
+  }
 
   test(
     "a start that fails leaves its run id unlabelled",

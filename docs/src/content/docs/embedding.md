@@ -12,7 +12,7 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 | Import | What it's for |
 |---|---|
 | `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `release`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; the types of the [`beforeToolCall`](#gate-tool-calls) hook (`BeforeToolCall`, `GatedCall`, `GateContext`, `GateDecision`, `ToolSource`, `FlowCallScope`); host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `VectorDBMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic`; `authoredText` and `escapeAuthorTags` (see [Label speakers for an outside agent](#label-speakers-for-an-outside-agent)) |
-| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `iterRunRecordsBackwards`, `runRecordAt`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex`; `takeInboxes`, which reads a wait's `inbox` (one name, or the list a take of several reads) as a list; for runs that start flows of their own, `ChildFlows` and `childFlows` (see [Child flows](#child-flows)) |
+| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `ReleaseOptions`, `MemoryDrift`, `EventHook`, `StreamHook` and the `beforeToolCall` types; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `iterRunRecordsBackwards`, `runRecordAt`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex`; `takeInboxes`, which reads a wait's `inbox` (one name, or the list a take of several reads) as a list; for runs that start flows of their own, `ChildFlows` and `childFlows`, and the checks they make of labels, `labelRefusal`, `labelsAlike` and `labelClashes` (see [Child flows](#child-flows)) |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, the ask handler types `AskHandler` and `AskRequest`, and the `beforeToolCall` types |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
@@ -611,6 +611,27 @@ const next = await advance({ log, tools: { ...tools, [owner.group]: flows } });
   - No person may read as the owner or another person. A label you give a child also may not read
     as its owner's, a person's, a label above it in the tree, or a sibling's that still runs. An
     owner of a run the driver started has that run's label.
+
+  Check names before a run, such as a person you add, with the checks the driver makes:
+  `labelRefusal(label)` gives why yian refuses a label alone (`{code, reason}`), or `null`;
+  `labelsAlike(label, other)` the first form two labels read alike in (`folded`, `skeleton`,
+  `folded_skeleton` or `upper_skeleton`), or `null`; and `labelClashes(labels)` each label that
+  reads as an earlier one (`{index, readsAs, form}`), in linear time. A refusal's `code` is
+  `empty`, `invisible`, `whitespace`, `hidden_dot`, `double_mark`, `reserved`, `relay` or `child`,
+  and its `reason` ends yian's error (`is reserved: nothing is signed yian or office`).
+
+  ```ts check=fragment
+  import { labelClashes, labelRefusal } from "@ngocbh/yian/run";
+
+  const labels = ["assistant", ...people];   // the owner's label, then its people
+  const problems = labels.flatMap((label) => {
+    const refusal = labelRefusal(label);
+    return refusal === null ? [] : [`${label} ${refusal.reason}`];
+  });
+  for (const { index, readsAs } of labelClashes(labels)) {
+    problems.push(`${labels[index]} reads as ${labels[readsAs]}`);
+  }
+  ```
 - **Parent.** A child records `parent: {runId, node, inbox, label}`: the owner's run, the node whose
   call started it (`start`'s `node`, which the group's `start` passes), the owner's `inbox` (none by
   default) and its own label.

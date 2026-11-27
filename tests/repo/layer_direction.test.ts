@@ -84,7 +84,7 @@ const only = (file: string) => (path: string) => path === file;
  * entry is a top-level module (without `.ts`) or folder of `src`.
  */
 const LAYERS: readonly (readonly string[])[] = [
-  ["diagnostics", "defaults", "typesys", "platform", "confusables"],
+  ["diagnostics", "defaults", "typesys", "platform", "confusables", "labels"],
   ["events", "expr", "llm", "llm_clients", "tools", "skills", "memory"],
   ["nodes"],
   ["compile"],
@@ -173,15 +173,15 @@ const RULES: Rule[] = [
     },
   },
   {
-    name: "run_entry.ts imports only run and child_flows",
+    name: "run_entry.ts imports only run, child_flows and labels",
     files: only("run_entry.ts"),
-    allow: ["run", "child_flows"],
+    allow: ["run", "child_flows", "labels"],
     builtins: false,
-    why: "run_entry.ts is the yian/run entry: it re-exports run.ts and the child-flow toolkit, and nothing else",
+    why: "run_entry.ts is the yian/run entry: it re-exports run.ts, the child-flow toolkit and its label checks, and nothing else",
     samples: {
       file: "run_entry.ts",
-      bad: ["cli/chat_run_tools", "index", "runtime/log", "tools/index", "platform"],
-      good: ["run", "child_flows"],
+      bad: ["cli/chat_run_tools", "index", "runtime/log", "tools/index", "platform", "confusables"],
+      good: ["run", "child_flows", "labels"],
     },
   },
 ];

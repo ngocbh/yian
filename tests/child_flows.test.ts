@@ -25,6 +25,7 @@ import {
 import { START_ID } from "../src/compile/model.ts";
 import { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { DefaultsMismatchError, type Env } from "../src/defaults.ts";
+import { reprText } from "../src/diagnostics.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import {
   advance,
@@ -38,6 +39,7 @@ import {
   runFlow,
   send,
 } from "../src/run.ts";
+import { labelRefusal } from "../src/labels.ts";
 import type { ChatModel } from "../src/llm/events.ts";
 import { withAuthorWrapper } from "../src/llm/body.ts";
 import { type Response, ToolResultPart } from "../src/llm/messages.ts";
@@ -2544,6 +2546,25 @@ describe("labels", () => {
     expect(owner("Olivia").label).toBe("Olivia");
     const made = owner("yian-chat", ["the user"]);
     expect([made.label, made.people, made.inbox]).toEqual(["yian-chat", ["the user"], null]);
+  });
+
+  test("an owner's and its people's labels are refused as labelRefusal refuses them, the first refused first", () => {
+    const children = childRuns();
+    const owner = (label: string, people: string[] = []) => children.owner({ runId: CHAT, group: "flows", label, people });
+    const refused = ["yian\u200b-chat", "yian  chat", "Oli\u0307via", "Zo\u00eb\u0308", "\u0443\u0456\u0430n", "Bob, \u2228ia Ada", "greet \u04333"];
+    for (const label of refused) {
+      const why = `${reprText(label)} ${labelRefusal(label)!.reason}`;
+      expect(() => owner(label)).toThrow(`an owner's label ${why}`);
+      expect(() => owner("yian-chat", ["Ada", label])).toThrow(`a person's label ${why}`);
+    }
+    // People are checked in order: each alone, then against the owner, then against those before.
+    const first: [string, string[], string][] = [
+      ["yian-chat", ["Ada", "ada", "Bob\u200b"], "'ada' reads as the person 'Ada'"],
+      ["yian-chat", ["Ada", "Bob\u200b", "ada"], `${reprText("Bob\u200b")} holds an invisible`],
+      ["yian-chat", ["Ada", "YIAN-CHAT", "ada"], "'YIAN-CHAT' reads as the owner's"],
+      ["Bob", ["\u042cob", "bob"], "'bob' reads as the owner's"],
+    ];
+    for (const [label, people, why] of first) expect(() => owner(label, people)).toThrow(`a person's label ${why}`);
   });
 
   test(

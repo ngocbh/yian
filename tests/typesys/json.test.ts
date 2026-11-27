@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  CanonicalText,
   canonicalJson,
   JSONBoundError,
   JSONDecodeError,
@@ -398,6 +399,12 @@ describe("canonicalJson", () => {
       expectRefusal(canonicalJson, value, "JCS numbers are ints within ±(2^53-1)");
     }
   });
+
+  test("writes a CanonicalText's text where it stands", () => {
+    const shared = new CanonicalText(canonicalJson({ b: [1n], a: null }));
+    expect(canonicalJson({ y: shared, x: [shared, "s"] })).toBe('{"x":[{"a":null,"b":[1]},"s"],"y":{"a":null,"b":[1]}}');
+    expect(canonicalJson(shared)).toBe('{"a":null,"b":[1]}');
+  });
 });
 
 describe("logJson", () => {
@@ -463,6 +470,10 @@ describe("logJson", () => {
     expectRefusal(logJson, [1n, [NaN], "\ud800"], "NaN is not valid canonical JSON");
     expectRefusal(logJson, { a: NaN, "\ud800": 1n }, "Unicode surrogate is not valid canonical JSON");
     expectRefusal(logJson, { a: [1n, Symbol("s")], b: NaN }, "symbol is not a canonical JSON value");
+  });
+
+  test("refuses a CanonicalText, as any class instance", () => {
+    expectRefusal(logJson, [new CanonicalText("1")], "CanonicalText is not a canonical JSON value");
   });
 
   test("logJson equals canonicalJson without floats and big ints", () => {

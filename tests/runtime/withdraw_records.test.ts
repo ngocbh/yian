@@ -30,8 +30,10 @@ import {
   prepareRecord,
   prepareRunCancelled,
   prepareRunStarted,
+  prepareRunResumed,
   prepareRunWaiting,
   prepareSend,
+  prepareTakeCommit,
   prepareWithdraw,
   RunState,
   wasWithdrawn,
@@ -136,13 +138,13 @@ test("on a closed inbox a take that lost its send reads what is still unread bef
   applyWaitsRecord(w, { seq: 6, record: new InboxWithdrawnRecord("msgs", [3]) });
   expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [4], closedInbox: false });
   expect(w.inboxes.get("msgs")!.unread).toEqual([]);
-  expect(decideWait(w, call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [4], closed: true } });
+  expect(decideWait(w, "a", call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [4], closed: true } });
 });
 
 test("withdraw on a closed inbox answers the take with the close; it takes {events: [], closed: true}", () => {
   const w = fold(...START, takeWait("a", "one"), send("msgs", "x"), new InboxClosedRecord("msgs"), new InboxWithdrawnRecord("msgs", [3]));
   expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [], closedInbox: true });
-  expect(decideWait(w, call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: true } });
+  expect(decideWait(w, "a", call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: true } });
 });
 
 test("an orphan inline take commit's events are withdrawn; run_resumed then re-offers nothing", () => {
@@ -309,6 +311,22 @@ test("prepareWithdraw of chosen sends takes only the unread ones, and is null wh
   const y = commitSend(run, "y");
   expect(prepareWithdraw(run.state, "msgs", [x])).toBeNull();
   expect(prepareWithdraw(run.state, "msgs", [x, y])!.record).toEqual(new InboxWithdrawnRecord("msgs", [y], { chosen: true }));
+});
+
+test("a withdraw doesn't reach the sends an orphan take commit read, before or after the resume", () => {
+  const run = started(waitFlow(tool("heard", "take")));
+  const { log, state } = run;
+  const x = commitSend(run, "x");
+  commitPrepared(log, state, prepareNodeStarted(state, "heard"));
+  commitPrepared(log, state, prepareTakeCommit(state, "heard", { inbox: "msgs", events: [x], closed: false }));
+  const y = commitSend(run, "y");
+  // The uncut run's take read x at its commit: only y is unread, before the resume and after it.
+  expect([prepareWithdraw(state, "msgs", [x]), withdrawableEvents(state.waits, "msgs")]).toEqual([null, [y]]);
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  expect([prepareWithdraw(state, "msgs", [x]), withdrawableEvents(state.waits, "msgs")]).toEqual([null, [y]]);
+  expect(() => prepareRecord(state, new InboxWithdrawnRecord("msgs", [x], { chosen: true }))).toThrow(
+    `InboxWithdrawn may name only the unread sends [${y}] of inbox 'msgs', found [${x}]`,
+  );
 });
 
 test("prepareWithdraw of chosen sends refuses unknown_send: no send, another inbox's, or with by another sender's", () => {

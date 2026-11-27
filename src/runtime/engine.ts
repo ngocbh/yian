@@ -992,7 +992,7 @@ export class FlowEngine {
       return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: outcome.callIds, steerInbox }));
     }
     const callId = toolCallId(state.runId!, nodeId);
-    const decision = decideWait(state.waits, callId, outcome.wait, this.#now());
+    const decision = decideWait(state.waits, nodeId, callId, outcome.wait, this.#now());
     if (decision.kind === "take") {
       // The commit and its success go in together: nothing is appended between them.
       commitPrepared(log, state, prepareTakeCommit(state, nodeId, decision.commit));

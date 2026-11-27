@@ -142,6 +142,7 @@ import {
   interruptedCalls,
   isWakeable,
   nodeCalls,
+  reclaimedTake,
   seqList,
   takenEvents,
   WaitsState,
@@ -4207,6 +4208,9 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
           throw new YianRangeError(`a take can't wait while inbox ${reprText(name)} holds unread events it may read`);
         }
       }
+      if (reclaimedTake(w, nodeId) !== null) {
+        throw new YianRangeError(`take node ${reprText(nodeId)} can't wait: it makes again the take commit a resume dropped`);
+      }
     }
   }
   const registering = new Set(record.waits.map((entry) => entry.callId));
@@ -5044,7 +5048,8 @@ function shownTakeInbox(inbox: TakeInbox): string {
 /**
  * Validate a take commit by an in-flight take node with no pending commit, under its target. A node
  * holding its take call commits what the call settled: its assigned events, closed when its inbox is
- * closed with nothing left a take may read; or, timed out, nothing. A node holding none commits
+ * closed with nothing left a take may read; or, timed out, nothing. A node holding none whose take
+ * commit a resume dropped commits it again as it was (`reclaimedTake`). Any other node commits
  * inline: the oldest event a take may read (`availableUnread`) or all of them, closed when its
  * inbox is closed and it takes them all; with none available, nothing, closed as its inbox is. An
  * inline commit of nothing on an open inbox is a timeout the reducer can't check, so it is accepted
@@ -5072,6 +5077,7 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
   const w = state.waits;
   const isClosed = (name: string) => w.inboxes.get(name)?.closed ?? false;
   const held = w.calls.get(toolCallId(state.runId!, nodeId));
+  const back = held === undefined ? reclaimedTake(w, nodeId) : null;
   let events: readonly number[];
   let done: (name: string) => boolean;
   if (held !== undefined) {
@@ -5087,6 +5093,16 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
     // A take of one inbox can't time out on a closed one, so it takes the timeout as not closed.
     const counts = held.state === "answered" || typeof take.inbox !== "string";
     done = (name) => counts && isClosed(name) && availableUnread(w, name).length === 0;
+  } else if (back !== null) {
+    if (!sameTakeInbox(back.inbox, take.inbox)) {
+      throw new YianRangeError(
+        `the take commit of ${reprText(nodeId)} reads ${shownTakeInbox(take.inbox)}, but the commit a resume dropped read ${shownTakeInbox(back.inbox)}`,
+      );
+    }
+    events = back.events;
+    // Closed as the dropped commit was: an inbox closed since was open when the uncut run read.
+    const closed = back.closed;
+    done = (name) => (typeof closed === "boolean" ? closed : closed.includes(name));
   } else {
     const available = availableIn(w, names);
     const k = take.events.length;
@@ -5098,7 +5114,7 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
   if (take.events.length !== events.length || take.events.some((seq, index) => seq !== events[index])) {
     throw new YianRangeError(
       `the take commit of ${reprText(nodeId)} must consume ${writeAsText([...events])}` +
-        `${held === undefined ? " (the oldest event a take may read, or all of them)" : ""}, found ${writeAsText([...take.events])}`,
+        `${held === undefined && back === null ? " (the oldest event a take may read, or all of them)" : ""}, found ${writeAsText([...take.events])}`,
     );
   }
   const expected = typeof take.inbox === "string" ? done(take.inbox) : names.filter(done);

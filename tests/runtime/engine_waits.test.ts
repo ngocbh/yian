@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
-import type { Node } from "../../src/nodes/base.ts";
+import { Node, NodeKind, type NodeResult, Pending } from "../../src/nodes/base.ts";
+import { HostToolCall } from "../../src/nodes/contracts.ts";
 import { FakeHost, inboxEngine, inboxFlow, recordNames } from "../helpers/inbox_fixtures.ts";
 import { engine, graph, RecordNode, rejected } from "../helpers/run_state_fixtures.ts";
 
@@ -446,7 +447,7 @@ test.each([1, 2])("a resume starts its retries before a waiting node wakes (%p w
   expect(run.state.result).toBeInstanceOf(RunSucceeded);
 });
 
-test("a waiting take wakes for events a dropped take commit freed", async () => {
+test("a resumed take gets back the event its dropped commit held, ahead of a take that waited meanwhile", async () => {
   const first = new FakeTake("first", "m");
   const second = new FakeTake("second", "m");
   const flow = pairFlow(first, second, ["m"]);
@@ -467,13 +468,64 @@ test("a waiting take wakes for events a dropped take commit freed", async () => 
   await run.run();
   const records = run.log.records().map((entry) => entry.record);
   const resumedAt = records.findIndex((record) => record instanceof RunResumedRecord);
-  // The resume gives the freed event to the take that waited for it; the retried take starts
-  // first, finds nothing left and waits, and then the waiting one wakes.
-  expect(records.slice(resumedAt + 1, resumedAt + 4).map((record) => [record.constructor, (record as NodeWokenRecord).nodeId])).toEqual([
-    [NodeStartedRecord, "first"],
-    [NodeWaitingRecord, "first"],
-    [NodeWokenRecord, "second"],
-  ]);
-  expect(run.state.pool.get("second")).toEqual({ events: ["hi"], closed: false });
-  expect([...run.state.waits.waiting.keys()]).toEqual(["first"]);
+  // As without the crash: the retried take reads the event again, and the other one still waits.
+  const after = records.slice(resumedAt + 1).map((record) => `${record.constructor.name} ${(record as { nodeId?: string }).nodeId ?? ""}`);
+  expect(after).toEqual(["NodeStartedRecord first", "PoolCommitRecord first", "NodeSucceededRecord first", "RunWaitingRecord "]);
+  expect(run.state.pool.get("first")).toEqual({ events: ["hi"], closed: false });
+  expect([...run.state.waits.waiting.keys()]).toEqual(["second"]);
+});
+
+/** A take one on `inbox`, as `FakeTake`, whose evaluation waits for `release()`; a copy of its graph shares the gate. */
+class GatedTake extends Node {
+  readonly kind = NodeKind.TOOL;
+  override readonly needsSteps = true;
+  override readonly wakesWithoutWorker = true;
+  readonly gate = Promise.withResolvers<void>();
+  readonly inbox: string;
+
+  constructor(id: string, inbox: string) {
+    super(id);
+    this.inbox = inbox;
+  }
+
+  release(): void {
+    this.gate.resolve();
+  }
+
+  override hostToolCall(): HostToolCall {
+    return new HostToolCall("take", null, [], new Map(), null);
+  }
+
+  override async forward(): Promise<NodeResult> {
+    await this.gate.promise;
+    return new Pending([], { wait: { tool: "take", inbox: this.inbox, mode: "one", timeoutSeconds: null } });
+  }
+}
+
+test.each([0, 1])("a pooled run cut at each record around a dropped take commit resumes as it ran (%p workers)", async (numWorkers) => {
+  // `early` starts first but reads last: `late` takes the event, and only then does `early` decide,
+  // and wait.
+  const early = new GatedTake("early", "m");
+  const late = new FakeTake("late", "m");
+  const flow = pairFlow(early, late, ["m"]);
+  const uncut: ReturnType<typeof inboxEngine> = inboxEngine(flow, {
+    numWorkers: 2,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeSucceeded && event.nodeId === START_ID) uncut.deliver({ kind: "send", inbox: "m", event: "hi" });
+      if (event instanceof NodeSucceeded && event.nodeId === "late") early.release();
+    },
+  });
+  await uncut.run();
+  expect(uncut.state.pool.get("late")).toEqual({ events: ["hi"], closed: false });
+  expect([...uncut.state.waits.waiting.keys()]).toEqual(["early"]);
+  const records = uncut.log.records();
+  const lateRead = indexOf(uncut, (record) => record instanceof PoolCommitRecord && record.nodeId === "late");
+  // Each cut from `early`'s start to the end, the one between `late`'s commit and its success among them.
+  for (let cut = indexOf(uncut, startedOf("early")) + 1; cut <= records.length; cut++) {
+    const run = reopened(flow, records.slice(0, cut), true, numWorkers);
+    await run.run();
+    // A read the log holds stands; with none, the retries read in the order they started.
+    const [reader, waiter] = cut > lateRead ? ["late", "early"] : ["early", "late"];
+    expect([cut, run.state.pool.get(reader), [...run.state.waits.waiting.keys()]]).toEqual([cut, { events: ["hi"], closed: false }, [waiter]]);
+  }
 });

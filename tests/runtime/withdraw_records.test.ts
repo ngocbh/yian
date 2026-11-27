@@ -136,13 +136,13 @@ test("on a closed inbox a take that lost its send reads what is still unread bef
   applyWaitsRecord(w, { seq: 6, record: new InboxWithdrawnRecord("msgs", [3]) });
   expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [4], closedInbox: false });
   expect(w.inboxes.get("msgs")!.unread).toEqual([]);
-  expect(decideWait(w, call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [4], closed: true } });
+  expect(decideWait(w, "a", call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [4], closed: true } });
 });
 
 test("withdraw on a closed inbox answers the take with the close; it takes {events: [], closed: true}", () => {
   const w = fold(...START, takeWait("a", "one"), send("msgs", "x"), new InboxClosedRecord("msgs"), new InboxWithdrawnRecord("msgs", [3]));
   expect(w.calls.get(call("a"))).toMatchObject({ state: "answered", assigned: [], closedInbox: true });
-  expect(decideWait(w, call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: true } });
+  expect(decideWait(w, "a", call("a"), takeOne(), 0)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: true } });
 });
 
 test("an orphan inline take commit's events are withdrawn; run_resumed then re-offers nothing", () => {

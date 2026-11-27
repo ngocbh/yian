@@ -851,21 +851,27 @@ describe("a take of two inboxes", () => {
 });
 
 describe("resumes and the terminal", () => {
-  test("a resume drops an orphan inline take commit; its events stay unread for the re-run", () => {
-    const { log, state } = started(waitFlow(tool("heard", "take")));
+  test("a resume keeps an orphan inline take commit for the re-run, which takes back its events alone", () => {
+    const { log, state } = started(paramFlow([MSGS, OTHERS], tool("heard", "take")));
     const first = send(log, state, "a");
     start(log, state, "heard");
     commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([first])));
     // The process ends here; a host sends while it is down.
     const downtime = send(log, state, "b");
+    const other = send(log, state, "o", "others");
     const resumed = prepareRunResumed(state, { numWorkers: 0 });
     expect(resumed.record).toEqual(new RunResumedRecord(["heard"], 0, []));
     expect(resumed.observers).toEqual([new RunResumed()]);
     commitPrepared(log, state, resumed);
-    expect(availableUnread(state.waits, "msgs")).toEqual([first, downtime]);
+    expect(availableUnread(state.waits, "msgs")).toEqual([downtime]);
     start(log, state, "heard");
-    takeAndSucceed(log, state, "heard", takeOf([first, downtime]));
-    expect(state.pool.store.get("heard")!.toObject()).toEqual({ events: ["a", "b"], closed: false });
+    for (const take of [takeOf([first, downtime]), takeOf([downtime])]) {
+      expect(() => prepareTakeCommit(state, "heard", take)).toThrow(`must consume [${first}], found`);
+    }
+    expect(() => prepareTakeCommit(state, "heard", takeOf([other], false, "others"))).toThrow(/but the commit a resume dropped read 'msgs'/);
+    takeAndSucceed(log, state, "heard", takeOf([first]));
+    expect(state.pool.store.get("heard")!.toObject()).toEqual({ events: ["a"], closed: false });
+    expect(availableUnread(state.waits, "msgs")).toEqual([downtime]);
     expect(state.crashedAttempts.get("heard")).toBe(1);
   });
 
@@ -905,7 +911,7 @@ describe("resumes and the terminal", () => {
   });
 });
 
-test("a resume's freed events go to a take that waited meanwhile, which then commits them", () => {
+test("a resume keeps a dropped take commit's events for its node, ahead of a take that waited meanwhile", () => {
   const { log, state } = started(waitFlow(tool("a", "take"), tool("b", "take")));
   const s = send(log, state, "hi");
   start(log, state, "a");
@@ -913,13 +919,13 @@ test("a resume's freed events go to a take that waited meanwhile, which then com
   commitPrepared(log, state, prepareTakeCommit(state, "a", takeOf([s])));
   wait(log, state, "b", takeEntry("b"));
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
-  expect(wakeableNodes(state.waits)).toEqual(["b"]);
+  expect(wakeableNodes(state.waits)).toEqual([]);
   expect(availableUnread(state.waits, "msgs")).toEqual([]);
-  commitPrepared(log, state, prepareNodeWoken(state, "b"));
-  takeAndSucceed(log, state, "b", takeOf([s]));
-  expect(state.pool.store.get("b")!.toObject()).toEqual({ events: ["hi"], closed: false });
   start(log, state, "a");
-  wait(log, state, "a", takeEntry("a"));
+  expect(() => wait(log, state, "a", takeEntry("a"))).toThrow("take node 'a' can't wait: it takes back the unread events of its commit a resume dropped");
+  takeAndSucceed(log, state, "a", takeOf([s]));
+  expect(state.pool.store.get("a")!.toObject()).toEqual({ events: ["hi"], closed: false });
+  expect([wakeableNodes(state.waits), [...state.waits.waiting.keys()]]).toEqual([[], ["b"]]);
 });
 
 /** Commit a close of `inbox` (default `msgs`) and return its seq. */

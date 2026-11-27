@@ -320,6 +320,7 @@ was running when the process died runs again, so its effect may happen twice:
 | A tool call (`call`, `map` or `loop` naming a tool) | Runs with the same `ctx.callId` and the next `ctx.attempt`. A tool with `retries:` keeps only the retries it had left |
 | `agent` | Reuses each recorded model reply and tool result without calling them again. A tool call with no recorded result is sent again, with the same `ctx.callId` and a higher `ctx.attempt`, when its tool is resumable; otherwise it is reported to the model as "The tool call was interrupted; its outcome is unknown. Check its effect before retrying." Then the agent carries on from its first unrecorded model call |
 | `case`, a `call`, `map` or `loop` running a flow, START, END | Computes the same result from the same inputs |
+| `take` | Takes back the messages it had read, before any other take can read them; one that hadn't read yet reads as usual |
 
 These nodes run again first, in the order they started, before any waiting node wakes. A run with
 `--num-workers 0` so writes its outcomes in the same order as if it had never crashed.

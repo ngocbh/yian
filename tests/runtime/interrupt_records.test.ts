@@ -607,11 +607,11 @@ describe("stops", () => {
       [takeWait("heard", "one"), send("msgs", "x"), new InboxClosedRecord("msgs")],
       [new InboxWithdrawnRecord("msgs", [3])],
     ],
-    // 2 x, 3 t starts, 4 t's orphan take of [2], 5 heard waits, 6 Stop, 7 resume re-offers x to heard
+    // 2 x, 3 t starts, 4 t's orphan take of [2], 5 heard waits, 6 Stop, 7 t's re-run takes x back
     [
-      "run_resumed re-offers an orphan's event to a waiting take",
+      "a re-run takes back its orphan's event",
       [send("msgs", "x"), new NodeStartedRecord("t"), takeCommit("t", [2]), takeWait("heard", "one")],
-      [new RunResumedRecord(["t"], 2)],
+      [new RunResumedRecord(["t"], 2), new NodeStartedRecord("t"), takeCommit("t", [2])],
     ],
   ])("a pickup closes the window: %s", (_, before, after) => {
     const w = fold(...START, ...before, stop("msgs"), ...after);
@@ -623,6 +623,12 @@ describe("stops", () => {
     ["a waited take's own commit", [takeWait("heard", "one"), send("msgs", "x"), new NodeWokenRecord("heard")], [takeCommit("heard", [3])]],
     ["a second send to an already answered take: all", [takeWait("heard", "all"), send("msgs", "x")], [send("msgs", "y")]],
     ["run_stopped and run_resumed", [], [new RunStoppedRecord("signal", "", []), new RunResumedRecord([], 0)]],
+    // 2 x, 3 t starts, 4 t's orphan take of [2], 5 heard waits, 6 Stop, 7 the resume keeps x for t
+    [
+      "run_resumed, which keeps an orphan's event for its node",
+      [send("msgs", "x"), new NodeStartedRecord("t"), takeCommit("t", [2]), takeWait("heard", "one")],
+      [new RunResumedRecord(["t"], 2)],
+    ],
     ["a node_woken that times nothing out", [takeWait("heard", "one"), send("msgs", "x")], [new NodeWokenRecord("heard")]],
     ["a node_step", [new NodeStartedRecord("reply")], [modelCall("reply", 1)]],
     ["a run_waiting before it stopped anyone", [], [new RunWaitingRecord(["approve"])]],

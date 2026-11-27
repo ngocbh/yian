@@ -105,7 +105,7 @@ describe("the scenarios' own rules", () => {
     const b = plain("b");
     const state = stateAt(b, "restarted");
     const request = { tool: "take", inbox: "msgs", mode: "one", timeoutSeconds: null } as const;
-    expect(decideWait(state.waits, call("heard"), request, 0)).toEqual({
+    expect(decideWait(state.waits, "heard", call("heard"), request, 0)).toEqual({
       kind: "take",
       commit: { inbox: "msgs", events: [b.marks.send!], closed: false },
     });
@@ -130,7 +130,7 @@ describe("the scenarios' own rules", () => {
 
   test("b-sleep: a sleep its deadline woke is done after a crash, with no new wait", () => {
     const state = stateAt(plain("b-sleep"), "restarted");
-    expect(decideWait(state.waits, call("nap"), { tool: "sleep", until: DEADLINE, forSeconds: null }, 0)).toEqual({ kind: "slept" });
+    expect(decideWait(state.waits, "nap", call("nap"), { tool: "sleep", until: DEADLINE, forSeconds: null }, 0)).toEqual({ kind: "slept" });
     expect(() => prepareNodeWaiting(state, "nap", { callIds: [call("nap")], waits: [sleepEntry("nap")] })).toThrow(/already registered/);
   });
 

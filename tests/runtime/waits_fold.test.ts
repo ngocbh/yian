@@ -143,10 +143,12 @@ test("a steer step removes its from from unread", () => {
   expect(unreadEvents(partial).get("msgs")).toEqual([3]);
 });
 
-test("an orphan take commit then run_resumed leaves its events unread and available", () => {
+test("an orphan take commit then run_resumed leaves its events unread, for its node alone", () => {
   const w = fold(...START, send("msgs", "x"), new NodeStartedRecord("heard"), takeCommit("heard", [2]), new RunResumedRecord(["heard"], 2));
   expect(unreadEvents(w).get("msgs")).toEqual([2]);
-  expect(availableUnread(w, "msgs")).toEqual([2]);
+  expect(availableUnread(w, "msgs")).toEqual([]);
+  expect(decideWait(w, "heard", "r/heard", takeAll(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [2], closed: false } });
+  expect(decideWait(w, "other", "r/other", takeOne(), AT9)).toMatchObject({ kind: "wait" });
 });
 
 test("a waiting take's success retires its call and touches no unread event", () => {
@@ -443,39 +445,39 @@ test.each<[string, RunRecord[], WaitRequest, unknown]>([
   ["sleep for 0 s", [], sleepFor(0), { kind: "slept" }],
 ])("decideWait: %s", (_name, records, request, decision) => {
   const w = fold(...START, ...records);
-  expect(decideWait(w, "r/heard", request, AT9)).toEqual(decision as never);
+  expect(decideWait(w, "heard", "r/heard", request, AT9)).toEqual(decision as never);
 });
 
 test("decideWait refuses a sleep until a time that isn't a record time", () => {
-  expect(() => decideWait(fold(...START), "r/nap", sleepUntil("tomorrow"), AT9)).toThrow(
+  expect(() => decideWait(fold(...START), "nap", "r/nap", sleepUntil("tomorrow"), AT9)).toThrow(
     "sleep until must be a UTC time such as 2026-10-20T14:02:11.123Z, found 'tomorrow'",
   );
 });
 
 test("decideWait reuses a held take or sleep call", () => {
   const answered = fold(...START, takeWait("heard", "one"), send("msgs", "x"), new NodeWokenRecord("heard"));
-  expect(decideWait(answered, "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3], closed: false } });
+  expect(decideWait(answered, "heard", "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3], closed: false } });
   const all = fold(...START, takeWait("heard", "all"), send("msgs", "x"), send("msgs", "y"), new InboxClosedRecord("msgs"), new NodeWokenRecord("heard"));
-  expect(decideWait(all, "r/heard", takeAll(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3, 4], closed: true } });
+  expect(decideWait(all, "heard", "r/heard", takeAll(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3, 4], closed: true } });
   // take: one with a later unread event: the inbox is closed, but not drained.
   const later = fold(...START, takeWait("heard", "one"), send("msgs", "x"), send("msgs", "y"), new InboxClosedRecord("msgs"), new NodeWokenRecord("heard"));
-  expect(decideWait(later, "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3], closed: false } });
+  expect(decideWait(later, "heard", "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [3], closed: false } });
   const byClose = fold(...START, takeWait("heard", "one"), new InboxClosedRecord("msgs"), new NodeWokenRecord("heard"));
-  expect(decideWait(byClose, "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: true } });
+  expect(decideWait(byClose, "heard", "r/heard", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: true } });
   const timedOut = fold(...START, takeWait("heard", "one", "msgs", T9), new NodeWokenRecord("heard", ["r/heard"]), send("msgs", "x"));
-  expect(decideWait(timedOut, "r/heard", takeOne(60), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: false } });
+  expect(decideWait(timedOut, "heard", "r/heard", takeOne(60), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: false } });
   const slept = fold(...START, sleepWait("heard", T9), new NodeWokenRecord("heard", ["r/heard"]));
-  expect(decideWait(slept, "r/heard", sleepFor(60), AT9)).toEqual({ kind: "slept" });
+  expect(decideWait(slept, "heard", "r/heard", sleepFor(60), AT9)).toEqual({ kind: "slept" });
 });
 
 test("decideWait refuses a call still open or one that isn't a take or sleep", () => {
-  expect(() => decideWait(fold(...START, takeWait("heard", "one")), "r/heard", takeOne(), AT9)).toThrow(
+  expect(() => decideWait(fold(...START, takeWait("heard", "one")), "heard", "r/heard", takeOne(), AT9)).toThrow(
     "call 'r/heard' is still open; its node can't decide its wait",
   );
   const ask = fold(...START, pending("heard", 1, "r/heard"));
-  expect(() => decideWait(ask, "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' isn't a take or sleep (tool 'ask')");
+  expect(() => decideWait(ask, "heard", "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' isn't a take or sleep (tool 'ask')");
   const cancelled = fold(...START, takeWait("heard", "one"), new RunCancelledRecord());
-  expect(() => decideWait(cancelled, "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' was closed (cancelled)");
+  expect(() => decideWait(cancelled, "heard", "r/heard", takeOne(), AT9)).toThrow("call 'r/heard' was closed (cancelled)");
 });
 
 test.each(Object.entries(WAIT_LOGS))("the fold resumes from its JSON form at every cut: %s", (_name, scenario) => {
@@ -555,10 +557,10 @@ test("a pending step without a deadline, or with a null one, has none", () => {
   expect(nodeCalls(w, "ask").map((call) => call.deadline)).toEqual([null, null]);
 });
 
-test("events a resume frees from an orphan take commit go to takes already waiting, oldest wait first", () => {
+test("a resume keeps an orphan take commit's events from the takes already waiting; its node takes them back", () => {
   // seq 2: s; 3: a starts; 4: a's inline commit holds s; 5, 6: b and c wait, nothing left to read;
-  // 7: the resume drops a's commit, so s goes to b.
-  const w = fold(
+  // 7: the resume keeps s for a, which reads it again, as without the crash; 8: a later send goes to b.
+  const records = [
     ...START,
     send("msgs", "s"),
     new NodeStartedRecord("a"),
@@ -566,11 +568,13 @@ test("events a resume frees from an orphan take commit go to takes already waiti
     takeWait("b", "one"),
     takeWait("c", "one"),
     new RunResumedRecord(["a"], 0),
-  );
-  expect(w.calls.get("r/b")!.assigned).toEqual([2]);
-  expect(w.calls.get("r/c")!.assigned).toEqual([]);
-  expect(unreadEvents(w)).toEqual(new Map());
-  expect(wakeableNodes(w)).toEqual(["b"]);
+  ];
+  const w = fold(...records, send("msgs", "t"));
+  expect([w.calls.get("r/b")!.assigned, w.calls.get("r/c")!.assigned, unreadEvents(w).get("msgs")]).toEqual([[8], [], [2]]);
+  expect(decideWait(w, "a", "r/a", takeOne(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [2], closed: false } });
+  // Settled without them, the node frees them for the takes waiting, oldest wait first.
+  const settled = fold(...records, new NodeRoutedRecord("a", "go"));
+  expect([settled.calls.get("r/b")!.assigned, settled.calls.get("r/c")!.assigned, unreadEvents(settled)]).toEqual([[2], [], new Map()]);
 });
 
 test("events freed when a take's node settles without its commit go to waiting takes", () => {
@@ -604,7 +608,7 @@ test("a take of two inboxes wakes for a send to either; take: one leaves both af
   expect(nodeCalls(w, "a")[0]).toMatchObject({ state: "answered", assigned: [3], assignedInboxes: ["queue"] });
   expect(unreadEvents(w)).toEqual(new Map([["msgs", [4]]]));
   expect([w.inboxes.get("msgs")!.absorbing, w.inboxes.get("queue")!.absorbing]).toEqual([[], []]);
-  expect(decideWait(w, "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [3], closed: [] } });
+  expect(decideWait(w, "a", "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [3], closed: [] } });
 });
 
 test("a take of two inboxes, take: all, takes every send of both in seq order", () => {
@@ -616,14 +620,14 @@ test("a take of two inboxes, take: all, takes every send of both in seq order", 
 
 test("a new take of two inboxes reads the oldest unread send of either, or all of them in seq order", () => {
   const w = fold(...START, send("queue", "q"), send("msgs", "m"), new InboxClosedRecord("queue"));
-  expect(decideWait(w, "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [2], closed: ["queue"] } });
-  expect(decideWait(w, "r/a", bothRequest("all"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [2, 3], closed: ["queue"] } });
+  expect(decideWait(w, "a", "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [2], closed: ["queue"] } });
+  expect(decideWait(w, "a", "r/a", bothRequest("all"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [2, 3], closed: ["queue"] } });
   // Nothing to read: it waits on the open inbox, and takes nothing at once only when both are closed.
   const empty = fold(...START, new InboxClosedRecord("queue"));
-  expect(decideWait(empty, "r/a", bothRequest("one"), AT9)).toMatchObject({ kind: "wait", entry: { inbox: BOTH } });
-  expect(decideWait(empty, "r/a", bothRequest("one", 0), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [], closed: ["queue"] } });
+  expect(decideWait(empty, "a", "r/a", bothRequest("one"), AT9)).toMatchObject({ kind: "wait", entry: { inbox: BOTH } });
+  expect(decideWait(empty, "a", "r/a", bothRequest("one", 0), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [], closed: ["queue"] } });
   applyWaitsRecord(empty, { seq: 3, record: new InboxClosedRecord("msgs") });
-  expect(decideWait(empty, "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [], closed: BOTH } });
+  expect(decideWait(empty, "a", "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [], closed: BOTH } });
 });
 
 test("a close answers a waiting take of two inboxes only once both are closed", () => {
@@ -632,7 +636,7 @@ test("a close answers a waiting take of two inboxes only once both are closed", 
   expect(w.inboxes.get("queue")!.absorbing).toEqual(["r/a"]);
   applyWaitsRecord(w, { seq: 4, record: new InboxClosedRecord("queue") });
   expect(nodeCalls(w, "a")[0]).toMatchObject({ state: "answered", closedInbox: true });
-  expect(decideWait(w, "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [], closed: BOTH } });
+  expect(decideWait(w, "a", "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [], closed: BOTH } });
 });
 
 test("a take of two inboxes waiting while one is closed absorbs from the other only", () => {
@@ -643,7 +647,7 @@ test("a take of two inboxes waiting while one is closed absorbs from the other o
 test("a timed-out take of two inboxes takes nothing and names the closed one", () => {
   const w = fold(...START, bothWait("a", "one", T9), new InboxClosedRecord("msgs"), new NodeWokenRecord("a", ["r/a"]));
   expect(w.inboxes.get("queue")!.absorbing).toEqual([]);
-  expect(decideWait(w, "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [], closed: ["msgs"] } });
+  expect(decideWait(w, "a", "r/a", bothRequest("one"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [], closed: ["msgs"] } });
 });
 
 test("a withdraw from one inbox leaves a take of two the other's send; left with none, it reads the oldest unread", () => {
@@ -691,6 +695,23 @@ test("an inline take of two inboxes holds its events until its success removes t
   expect([availableUnread(w, "msgs"), availableUnread(w, "queue")]).toEqual([[], []]);
   applyWaitsRecord(w, { seq: 6, record: new NodeSucceededRecord("heard", 5) });
   expect(unreadEvents(w)).toEqual(new Map());
+});
+
+test("a resume keeps an inline take of two inboxes for its node: a withdraw takes one event, and the take waiting reads neither", () => {
+  // seq 2: m; 3: q; 4: a starts; 5: a's commit holds both; 6: b waits on both; 7: the resume;
+  // 8: m taken back, which b doesn't lose, so nothing is offered; a takes back q.
+  const w = fold(
+    ...START,
+    send("msgs", "m"),
+    send("queue", "q"),
+    new NodeStartedRecord("a"),
+    new PoolCommitRecord("a", "a", null, { take: { inbox: BOTH, events: [2, 3], closed: [] } }),
+    bothWait("b", "one"),
+    new RunResumedRecord(["a"], 2),
+    new InboxWithdrawnRecord("msgs", [2]),
+  );
+  expect(nodeCalls(w, "b")[0]).toMatchObject({ state: "open", assigned: [] });
+  expect(decideWait(w, "a", "r/a", bothRequest("all"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [3], closed: [] } });
 });
 
 test("the JSON form keeps a take of two inboxes and its assignments", () => {

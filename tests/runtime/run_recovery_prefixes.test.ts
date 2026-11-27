@@ -144,14 +144,15 @@ test("a replayed RunStarted keeps the recorded defaults and call-time LLM config
   expect(recovered.nextSequence).toBe(live.nextSequence);
 });
 
-test("the historical cursor matches each envelope's text", () => {
+test("the historical cursor matches each envelope's text and hands back its decoded envelope", () => {
   const { log } = linearHistory();
   const wires = log.records().map(encodeRecord);
-  const cursor = new HistoricalLogCursor(wires);
+  const envelopes = wires.map(decodeRecord);
+  const cursor = new HistoricalLogCursor(wires, envelopes);
   expect(cursor.runId).toBe(RUN_ID);
   expect(cursor.path).toBeNull();
 
-  for (const wire of wires) {
+  for (const [index, wire] of wires.entries()) {
     const expected = decodeRecord(wire);
     const before = cursor.nextSequence;
     expectError(
@@ -161,6 +162,7 @@ test("the historical cursor matches each envelope's text", () => {
     );
     expect(cursor.nextSequence).toBe(before);
     const accepted = cursor.append(expected.record);
+    expect(accepted).toBe(envelopes[index]!);
     expect(accepted.schema).toBe(SCHEMA_VERSION);
     expect(encodeRecord(accepted)).toBe(wire);
   }

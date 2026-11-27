@@ -635,7 +635,8 @@ function committedText(state: RunState, key: string, value: unknown): string {
 
 /**
  * Rebuild spawner `spawnerId`'s growth from its expansion commits' `from` (see
- * `rebuildCommit`): its canonical seed and sorted prune ids.
+ * `rebuildCommit`): its canonical seed, the builder's independent copy of it (as a live growth
+ * builds from), and sorted prune ids.
  *
  * With `from` `null` (every child START of the expansion fails to bind, so it wrote no commit),
  * the spawner binds from the whole pool. That is sound for the same reason the commits are: the
@@ -649,10 +650,11 @@ export function rebuildGrowth(
   state: RunState,
   spawnerId: string,
   from: ReadonlyMap<string, number> | null,
-): { seed: JsonValue; pruneIds: readonly string[] } {
+): { seed: JsonValue; builderSeed: JsonValue; pruneIds: readonly string[] } {
   const outcome = rebuildDerivedRecord(state, spawnerId, from);
   if (!(outcome instanceof Grow)) throw new YianRangeError(`spawner ${reprText(spawnerId)} rebuilds to a value, not a growth`);
-  return { seed: canonicalSeed(outcome.seed)[0], pruneIds: [...outcome.prune].sort(compareCodeUnits) };
+  const [seed, builderSeed] = canonicalSeed(outcome.seed);
+  return { seed, builderSeed, pruneIds: [...outcome.prune].sort(compareCodeUnits) };
 }
 
 /**
@@ -1095,8 +1097,9 @@ export class PreparedTransition {
 /**
  * @internal The read-only historical authority presented to the live commit reducer.
  *
- * The cursor owns canonical envelope texts. Its `append` advances only when the reducer's exact
- * next envelope matches that text; it never writes to or closes the log the prefix came from.
+ * The cursor owns canonical envelope texts and the envelopes decoded from them. Its `append`
+ * advances only when the reducer's exact next envelope matches that text; it never writes to or
+ * closes the log the prefix came from.
  */
 export class HistoricalLogCursor implements RunLog {
   /** The sole historical run id this cursor accepts. */
@@ -1104,12 +1107,17 @@ export class HistoricalLogCursor implements RunLog {
   /** Always `null`: the cursor borrows already-read authority. */
   readonly path = null;
   readonly #envelopeJsons: readonly string[];
+  readonly #envelopes: readonly RecordEnvelope[];
   readonly #consumed: RecordEnvelope[] = [];
 
-  /** Adopt one validated non-empty canonical prefix at sequence zero. */
-  constructor(envelopeJsons: readonly string[]) {
+  /**
+   * Adopt one validated non-empty canonical prefix at sequence zero: its texts, and the envelope
+   * each decodes to.
+   */
+  constructor(envelopeJsons: readonly string[], envelopes: readonly RecordEnvelope[]) {
     this.#envelopeJsons = envelopeJsons;
-    this.runId = decodeRecord(envelopeJsons[0]!).runId;
+    this.#envelopes = envelopes;
+    this.runId = envelopes[0]!.runId;
   }
 
   /** The sequence of the historical envelope the next reducer commit must match. */
@@ -1138,7 +1146,7 @@ export class HistoricalLogCursor implements RunLog {
       throw new YianRangeError("replay attempted to append beyond the historical prefix");
     }
     const expected = this.#envelopeJsons[sequence]!;
-    const envelope = decodeRecord(expected);
+    const envelope = this.#envelopes[sequence]!;
     // The historical time is kept: replay compares records, not when they were appended.
     const candidate = encodeRecord(new RecordEnvelope(envelope.schema, this.runId, sequence, record, envelope.at));
     if (candidate !== expected) throw new YianRangeError("prepared transition does not match the historical run record");
@@ -3087,8 +3095,8 @@ function prepareGrowthRecord(
     // The seed is rebuilt from the expansion commits' shared `from` (checked when they're
     // admitted) before the prune applies, so the names it read are still in the pool.
     const from = pendingExpansion(state, record.spawnerId)[0]?.from ?? null;
-    const { seed: seedWire, pruneIds } = rebuildGrowth(state, record.spawnerId, from);
-    const fragment = buildGrowthFragment(state.flow.nodes.get(record.spawnerId)!, canonicalSeed(seedWire)[1], growBuilder);
+    const { seed: seedWire, builderSeed, pruneIds } = rebuildGrowth(state, record.spawnerId, from);
+    const fragment = buildGrowthFragment(state.flow.nodes.get(record.spawnerId)!, builderSeed, growBuilder);
     if (!sameItems(pruneIds, record.pruneIds)) {
       throw new YianRangeError(
         `NodeExpandedRecord prune ids ${writeAsText([...record.pruneIds])} differ from the rebuilt ${writeAsText([...pruneIds])}`,
@@ -3276,6 +3284,9 @@ export function replayRecords(
   if (envelopes.length === 0) throw new YianRangeError("cannot replay an empty run-record prefix");
 
   const canonical: string[] = [];
+  // Each canonical text decoded once: envelopes and records are frozen, so the reducer and the
+  // cursor can share them.
+  const decoded: RecordEnvelope[] = [];
   let runId: string | null = null;
   for (const [expectedSequence, supplied] of envelopes.entries()) {
     const encoded = encodeRecord(supplied);
@@ -3289,12 +3300,13 @@ export function replayRecords(
       throw new YianRangeError(`replay run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`);
     }
     canonical.push(encoded);
+    decoded.push(envelope);
   }
 
-  const first = decodeRecord(canonical[0]!);
+  const first = decoded[0]!;
   const start = first.record;
   if (!(start instanceof RunStartedRecord)) throw new YianRangeError("the first historical run record must be RunStarted");
-  const cursor = new HistoricalLogCursor(canonical);
+  const cursor = new HistoricalLogCursor(canonical, decoded);
   const prepared = prepareRunStarted(state, {
     runId: first.runId,
     flowFingerprint: start.flowFingerprint,
@@ -3314,8 +3326,7 @@ export function replayRecords(
   });
   commitPrepared(cursor, state, prepared);
 
-  for (const encoded of canonical.slice(1)) {
-    const envelope = decodeRecord(encoded);
+  for (const envelope of decoded.slice(1)) {
     let next: PreparedTransition;
     try {
       next = prepareRecord(state, envelope.record, { growBuilder });

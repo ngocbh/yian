@@ -11,7 +11,7 @@
  * marked by `.0`. Both write infinity as yian's tag, escape records shaped like the tag, and
  * write any depth. Like `JSON.stringify` they write only an object's own enumerable string keys
  * and an array's indices, but an object with symbol keys is refused; they refuse what isn't
- * canonical JSON.
+ * canonical JSON. `canonicalJson` also writes a `CanonicalText`'s text where it stands.
  *
  * It imports nothing from yian, so the `llm/` leaf can use it.
  */
@@ -379,6 +379,20 @@ export function parseJson(text: string, mode: JsonMode, bounds: JsonBounds = {})
   }
 }
 
+/**
+ * Canonical JSON text written once, which `canonicalJson` writes where the object stands, so a
+ * part many values share is written once (a manifest's types). `logJson` refuses it.
+ */
+export class CanonicalText {
+  /** The part's `canonicalJson` text. */
+  readonly text: string;
+
+  constructor(text: string) {
+    this.text = text;
+    Object.freeze(this);
+  }
+}
+
 /** A container being written: its entries (an object's keys already quoted), the next one, and its close. */
 type WriteFrame =
   | { readonly array: readonly unknown[]; index: number }
@@ -421,11 +435,12 @@ function logNumber(n: number | bigint): string {
 }
 
 /**
- * Return `root` as compact key-sorted JSON, writing each finite number with `number`. Like
- * `JSON.stringify` it writes an object's own enumerable string keys and an array's indices; an
- * object with symbol keys, and other input that isn't JSON, is refused.
+ * Return `root` as compact key-sorted JSON, writing each finite number with `number`, and each
+ * `CanonicalText` as its text when `texts` is set. Like `JSON.stringify` it writes an object's own
+ * enumerable string keys and an array's indices; an object with symbol keys, and other input that
+ * isn't JSON, is refused.
  */
-function write(root: unknown, number: (n: number | bigint) => string): string {
+function write(root: unknown, number: (n: number | bigint) => string, texts = false): string {
   let out = "";
   // Ancestors only, so a shared sub-value writes twice and only a cycle is refused.
   const active = new Set<object>();
@@ -448,6 +463,8 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
       else out += number(value);
     } else if (typeof value !== "object") {
       throw new YianTypeError(`${typeof value} is not a canonical JSON value`);
+    } else if (texts && value instanceof CanonicalText) {
+      out += value.text;
     } else if (Array.isArray(value)) {
       if (active.has(value)) throw new YianTypeError("cyclic container cannot be canonicalized");
       active.add(value);
@@ -507,9 +524,12 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
   return out;
 }
 
-/** Return `value` as RFC 8785 (JCS) text, infinity written as yian's tag (fingerprints). */
+/**
+ * Return `value` as RFC 8785 (JCS) text, infinity written as yian's tag (fingerprints), and each
+ * `CanonicalText` in it as its text.
+ */
 export function canonicalJson(value: unknown): string {
-  return write(value, jcsNumber);
+  return write(value, jcsNumber, true);
 }
 
 /** Return `value` as a run-log line: JCS layout with ints of any size and floats marked by `.0`. */

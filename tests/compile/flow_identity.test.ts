@@ -6,6 +6,7 @@
  */
 
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +38,7 @@ import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
-import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
+import { FileRef, memoryType, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
 import { editRecordedFlow } from "../helpers/run_state_fixtures.ts";
 import { thrownClass } from "../helpers/own_errors.ts";
@@ -1196,6 +1197,57 @@ test("deep untagged union manifests quickly", () => {
   // Ordering each level's members labels that level's subtree, so the work is quadratic in
   // depth; an exponential relabelling of nested members would not finish within the timeout.
   expect(flowFingerprint(fragmentWithOutput(typ))).toMatch(HEX);
+});
+
+/** The lowercase SHA-256 of `text`'s UTF-8 bytes. */
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+test("a digest is the SHA-256 of the manifest's canonical text, each time a type is read again", () => {
+  const nested = member("buy", { qty: ValueKind.INTEGER });
+  const typ = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map<string, Type>([
+      ["order", union(nested, member("sell", { price: ValueKind.NUMBER }))],
+      ["orders", new Type({ kind: ValueKind.LIST_ANY, element: nested, nullable: true })],
+      ["size", new Type({ kind: ValueKind.INTEGER, bounds: [1n, null] })],
+      ["notes", memoryType("FileMemory", nested)],
+    ]),
+    required: new Set(["order", "size"]),
+  });
+  const flow = fragmentWithOutput(typ);
+  // The same type twice in one flow, and again in a later digest.
+  code(flow, "body").params = [new Parameter("x", { contract: new ValueContract(typ) })];
+  const expected = sha256(canonicalJson(flowManifest(flow)));
+  for (let round = 0; round < 2; round++) {
+    expect(flowFingerprint(flow)).toBe(expected);
+    // A plain Flow with no seed connections or child boundaries digests as it fingerprints.
+    expect(expansionDigest(flow)).toBe(expected);
+  }
+});
+
+test("a digest writes a type's manifest once and reuses its text", () => {
+  // A `Type` never changes once built, so a later digest needn't read it again.
+  const typ = new Type({ kind: ValueKind.OBJECT, fields: new Map([["a", intType()]]), required: new Set(["a"]) });
+  let reads = 0;
+  Object.defineProperty(typ, "kind", { enumerable: true, get: () => (reads++, ValueKind.OBJECT) });
+  const flow = fragmentWithOutput(typ);
+  const fingerprint = flowFingerprint(flow);
+  const first = reads;
+  expect(first).toBeGreaterThan(0);
+  expect(flowFingerprint(flow)).toBe(fingerprint);
+  expect(expansionDigest(fragmentWithOutput(typ))).toBe(expansionDigest(flow));
+  expect(reads).toBe(first);
+});
+
+test("a type whose manifest can't be written fails the digest, and isn't kept", () => {
+  const typ = new Type({ kind: ValueKind.OBJECT, fields: new Map([["\ud800", intType()]]) });
+  const flow = fragmentWithOutput(typ);
+  for (let round = 0; round < 2; round++) {
+    expectError(() => flowFingerprint(flow), TypeError, "Unicode surrogate is not valid canonical JSON");
+    expectError(() => expansionDigest(flow), TypeError, "Unicode surrogate is not valid canonical JSON");
+  }
 });
 
 test.each([

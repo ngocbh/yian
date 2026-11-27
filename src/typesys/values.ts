@@ -1463,7 +1463,9 @@ export interface TypeInit {
  * Union members are non-nullable records; a nullable union sets `nullable` on the
  * union itself. `nullable` marks an `Optional(X)` slot, which accepts null.
  * A `Type` must not be changed after it is built (its `fields` map included), so copies
- * of a flow share it.
+ * of a flow share it. Digests also keep a type's canonical text by identity
+ * (`compile/manifest.ts`), so a `Type` changed in place after a digest would keep its old text
+ * in that process.
  */
 export class Type {
   readonly kind: ValueKind;

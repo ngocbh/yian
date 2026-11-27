@@ -11,7 +11,9 @@
  *
  * A manifest is plain JSON for `canonicalJson` (RFC 8785): every value is a typed wrapper
  * (`{"type": "int", "value": "1"}`, a float as its IEEE-754 big-endian hex), and only counts are
- * raw JSON ints. The fingerprint is SHA-256 over that text.
+ * raw JSON ints. The fingerprint is SHA-256 over that text. A digest writes each `Type`'s manifest
+ * once and reuses its text, since a type never changes once built: a run's growths repeat the
+ * same types in every fragment.
  *
  * Knows about: diagnostics, expr (`Verbatim`), nodes, tools (grants), typesys and compile/model.
  */
@@ -44,7 +46,7 @@ import { ToolNode } from "../nodes/tool/node.ts";
 import { authoredGrant, type ToolGrant } from "../tools/grants.ts";
 import type { ToolModuleRef } from "../tools/modules.ts";
 import { YianRangeError, YianTypeError } from "../typesys/errors.ts";
-import { canonicalJson, type JsonObject, type JsonValue } from "../typesys/json.ts";
+import { CanonicalText, canonicalJson, type JsonObject, type JsonValue } from "../typesys/json.ts";
 import {
   canonicalUnionOrder,
   FileRef,
@@ -247,7 +249,16 @@ class ManifestContext {
   readonly flows = new Set<object>();
   readonly values = new Set<object>();
   readonly types = new Set<object>();
+  /** Whether a type's manifest may be its written text (`typeTexts`): for a digest, not `flowManifest`. */
+  readonly forDigest: boolean;
+
+  constructor(forDigest: boolean) {
+    this.forDigest = forDigest;
+  }
 }
+
+/** Each type's manifest as a digest wrote it, kept for the next digest that reads the type. */
+const typeTexts = new WeakMap<Type, CanonicalText>();
 
 /** Name `value`'s type for a message, `null` for `null`. */
 function typeName(value: unknown): string {
@@ -525,13 +536,33 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
  * An absent refinement is `null`; `bounds` and `union` appear only when present, the members in
  * canonical order so authored order is not identity. A memory type projects as its name, its item
  * record and its nullability only, never the instance bound to it, so a host memory type gives
- * the same manifest however its name was registered.
+ * the same manifest however its name was registered. For a digest it is the type's written text,
+ * a `CanonicalText`, kept in `typeTexts` the first time a digest writes the type.
  *
  * @throws RangeError for a cyclic type or a field policy mismatch.
  * @throws TypeError or RangeError as `validateShape` does, for a bounded or union type.
  */
 function typeManifest(value: Type | null | undefined, ctx: ManifestContext, path: string): JsonValue {
   if (value === null || value === undefined) return null;
+  if (!ctx.forDigest) return typeManifestOf(value, ctx, path);
+  // `canonicalJson` writes the text where the type stands, so the digest's text is the same.
+  const written = typeTexts.get(value);
+  if (written !== undefined) return written as unknown as JsonValue;
+  const manifest = typeManifestOf(value, ctx, path);
+  let text: string;
+  try {
+    text = canonicalJson(manifest);
+  } catch {
+    // Not kept: the digest's own write refuses it, after the rest of the manifest, as before.
+    return manifest;
+  }
+  const out = new CanonicalText(text);
+  typeTexts.set(value, out);
+  return out as unknown as JsonValue;
+}
+
+/** `typeManifest`'s manifest of one type, built from its fields. */
+function typeManifestOf(value: Type, ctx: ManifestContext, path: string): JsonValue {
   checkFields(value, TYPE_FIELDS, path);
   return within(ctx.types, value, `${path}: cyclic Type is not manifestable`, () => {
     if (isMemoryType(value)) {
@@ -1004,12 +1035,12 @@ function digest(value: JsonValue): string {
  * @throws RangeError when a node or flow has an unknown field or a recursive object cycle.
  */
 export function flowManifest(flow: Flow): JsonObject {
-  return flowManifestOf(flow, new ManifestContext(), "flow", false);
+  return flowManifestOf(flow, new ManifestContext(false), "flow", false);
 }
 
 /** Return lowercase SHA-256 over the canonical recursive authored-flow manifest. */
 export function flowFingerprint(flow: Flow): string {
-  return digest(flowManifest(flow));
+  return digest(flowManifestOf(flow, new ManifestContext(true), "flow", false));
 }
 
 /**
@@ -1024,5 +1055,5 @@ export function flowFingerprint(flow: Flow): string {
  * @returns A lowercase 64-character SHA-256 hexadecimal digest.
  */
 export function expansionDigest(fragment: Flow): string {
-  return digest(flowManifestOf(fragment, new ManifestContext(), "expansion", true));
+  return digest(flowManifestOf(fragment, new ManifestContext(true), "expansion", true));
 }

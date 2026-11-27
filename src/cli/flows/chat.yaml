@@ -5,8 +5,10 @@
 # as a user message; each turn takes everything sent since the last one, compacts the history
 # with compact_history.yaml, and answers with `reply`, whose system prompt carries the rolling
 # summary. Messages sent while `reply` runs steer it, and an interrupt cuts it (its output is then
-# null). The flows it starts report to `owner_messages` when they pause or end (a question, a held
-# tool call, a reply, an output, a failure), each a user message signed by the run's label.
+# null). A line the user queues while `reply` runs goes to `queued` instead, which only the take
+# that starts a turn reads, with `owner_messages`: the next turn takes every queued line, in the
+# order sent. The flows it starts report to `owner_messages` when they pause or end (a question, a
+# held tool call, a reply, an output, a failure), each a user message signed by the run's label.
 #
 # A message of `action` parts only is something the user did themselves: `/model`, or a press on a
 # run's tool. A turn notes it in its state without answering it, and the next answered turn reads
@@ -30,6 +32,7 @@ uses:
 
 input:
   owner_messages: !Inbox(Message)
+  queued: !Inbox(Message)     # lines for the next turn, which the reply doesn't read as steers
   flow: !Optional(str)        # the path of the flow in focus
   focus: !Optional(str)       # its text and its check, for the system prompt
   model: !Optional(Model)     # the replies' model; null for the run's defaults
@@ -193,6 +196,7 @@ defs:
       flow: !Optional(str)
       focus: !Optional(str)
       owner_messages: !Inbox(Message)
+      queued: !Inbox(Message)
     nodes:
       compacted:
         kind: call
@@ -200,9 +204,11 @@ defs:
         input: {summary: "${input.summary}", history: "${input.history}", model: "${input.model}"}
       heard:
         kind: call
-        call: take                       # waits until a message arrives or the inbox closes
+        call: take                       # waits until a message arrives or both inboxes close
         input:
-          from: ${input.owner_messages}
+          from:
+            - ${input.owner_messages}
+            - ${input.queued}
           take: all
       sorted:                            # the user's actions apart from what the turn answers
         kind: code
@@ -224,7 +230,7 @@ defs:
           let model = inputs.model;
           const noted = [...inputs.noted];
           const said = [];
-          for (const message of inputs.events) {
+          for (const { event: message } of inputs.events) {
             if (!acted(message)) said.push(message);
             else {
               noted.push(message);
@@ -284,6 +290,7 @@ nodes:
       flow: ${input.flow}
       focus: ${input.focus}
       owner_messages: ${input.owner_messages}
+      queued: ${input.queued}
     while: not closed
 output: !Transcript
   summary: ${chat.output.summary}

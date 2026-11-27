@@ -47,7 +47,14 @@ import {
   type WaitInfo,
   withdraw,
 } from "../run.ts";
-import { type InboxClosedRecord, iterRunRecords, recordTimeMs, takeInboxes } from "../runtime/log.ts";
+import {
+  type InboxClosedRecord,
+  iterRunRecords,
+  iterRunRecordsBackwards,
+  type PoolCommitRecord,
+  recordTimeMs,
+  takeInboxes,
+} from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
@@ -175,6 +182,11 @@ export interface InboxChatHost {
   /** Called when Ctrl-C or Esc interrupts a turn: to end the host's tool calls that wait meanwhile. */
   onInterrupt?: (() => void) | null;
   /**
+   * The inbox a line queued in the input box goes to (Alt+Enter, or Ctrl-X then Enter, while a turn
+   * runs), which only the take that starts a turn reads. With none, those keys send as Enter does.
+   */
+  queue?: string | null;
+  /**
    * Who the typed lines are from, recorded on their sends and on the user's other calls (`by`):
    * Esc then takes back only their sends. `null` or absent records no one, and Esc takes back
    * every unread send.
@@ -254,8 +266,11 @@ export interface InboxChatView {
   input(input: LineEditor | null): void;
   /** Draw the input box again, once a key changed it. */
   refresh(): void;
-  /** A line sent from the input box while a turn runs, printed as the prompt leaves one. */
-  echo(line: string): void;
+  /**
+   * A line sent from the input box while a turn runs, printed as the prompt leaves one; with
+   * `turn`, a queued line that starts a turn.
+   */
+  echo(line: string, turn?: boolean): void;
 }
 
 /**
@@ -475,6 +490,14 @@ function inboxClosed(log: string, inbox: string): boolean {
  * printed (`(not sent: <text>)`), as is what is still held when the chat ends otherwise. With
  * `host.by`, the user's lines and calls record it, and Esc takes back only their sends.
  *
+ * With `host.queue`, Alt+Enter (or Ctrl-X then Enter) in the box while a turn runs sends the line
+ * to that inbox instead: it is drawn above the box (`queued: <line>`) until a take reads it, then
+ * echoed as a line starting the turn. Up on the box's first row takes the queued lines back into
+ * the box, a line each (`withdraw` by their seqs); Esc takes them back with the lines sent. While
+ * a host command waits for the turn's end, a line queued is refused and stays in the box. `/exit`
+ * takes them back and prints each as not sent (`(not sent: <line>)`), then closes the queue after
+ * the inbox.
+ *
  * With `host.commands`, a line that names one runs it at the prompt and does what it returns:
  * sends its action, keyed, and leaves the prompt up, the run's next take reading it with the next
  * line; closes the inbox, as `/exit`; or nothing. One entered in the box during a turn waits for
@@ -568,6 +591,12 @@ export async function inboxChat(
   let releaseRaw = (): void => {};
   // The seqs of the host's news that no move is known to have read yet, in the order it came.
   const news: number[] = [];
+  // The lines queued from the input box that no take is known to have read, in the order sent:
+  // their seqs and what the box held.
+  const queue = host.queue ?? null;
+  const queued: { readonly seq: number; readonly draft: Draft }[] = [];
+  // The newest take commit a look for the queued lines' takes has read: no look reads it again.
+  let lookedTo = 0;
   // Set from the user's interrupt until their next line, while the host holds its news.
   let held = false;
   // The host's taking its hold, which the interrupt waits for, and its letting the last one go.
@@ -690,6 +719,33 @@ export async function inboxChat(
     }
     line?.abort();
   };
+  /**
+   * Drop the queued lines a take has read, by the take commits logged since the oldest that no look
+   * read before, and echo each as the prompt leaves a line: the turn that reads them starts with
+   * them, so a Ctrl-C after it is a first press, as after a line sent.
+   */
+  const readQueued = (): void => {
+    if (queued.length === 0 || log === null) return;
+    const read = new Set<number>();
+    const floor = Math.max(queued[0]!.seq, lookedTo);
+    for (const entry of iterRunRecordsBackwards(log, { kinds: ["pool_commit"] })) {
+      if (entry.seq <= floor) break;
+      lookedTo = Math.max(lookedTo, entry.seq);
+      for (const seq of (entry.envelope.record as PoolCommitRecord).take?.events ?? []) read.add(seq);
+    }
+    const lines = queued.filter((each) => read.has(each.seq));
+    if (lines.length === 0) return;
+    dropQueued(read);
+    pressedAt = null;
+    for (const [i, each] of lines.entries()) view?.echo(draftLabel(each.draft), i === 0);
+    view?.refresh();
+  };
+  /** Drop the queued lines `seqs` names, read or taken back: they move the run no more. */
+  const dropQueued = (seqs: ReadonlySet<number>): void => {
+    const dropped = new Set(queued.flatMap((each) => (seqs.has(each.seq) ? [each.seq] : [])));
+    queued.splice(0, queued.length, ...queued.filter((each) => !dropped.has(each.seq)));
+    liveSeqs.splice(0, liveSeqs.length, ...liveSeqs.filter((seq) => !dropped.has(seq)));
+  };
   // Esc: take back what the run hasn't read, then stop the turn; the text goes back to the prompt.
   // It never cancels and isn't a Ctrl-C press.
   const escape = (): void => {
@@ -720,6 +776,8 @@ export async function inboxChat(
           if (!(error instanceof DeliveryRefused)) throw error;
         }
       }
+      // The queued lines come back too, so that no turn starts on them once the reply stops.
+      if (queue !== null) back = [...back, ...(await withdraw(path, queue, typist))].sort((a, b) => a.seq - b.seq);
       // What was taken back is no longer for the run to read: it moves the run no more.
       const gone = new Set(back.map((event) => event.seq));
       liveSeqs.splice(0, liveSeqs.length, ...liveSeqs.filter((seq) => !gone.has(seq)));
@@ -729,8 +787,10 @@ export async function inboxChat(
         // paste would (a long one as a token).
         const drafts = back.map((event) => {
           const text = valueText(event.value, inbox.message);
-          return sent.get(event.seq) ?? (editor === null || closed ? [text] : textDraft(text));
+          const kept = sent.get(event.seq) ?? queued.find((each) => each.seq === event.seq)?.draft;
+          return kept ?? (editor === null || closed ? [text] : textDraft(text));
         });
+        dropQueued(gone);
         const count = `${back.length} message${back.length === 1 ? "" : "s"}`;
         // After /exit no prompt comes back, so the text is printed rather than lost.
         if (closed) await note(`(withdrew ${count}: ${draftLabel(joinDrafts(drafts))})\n`);
@@ -748,6 +808,7 @@ export async function inboxChat(
       }
       // The run has read every line it didn't give back, so none of those can come back.
       for (const seq of known) sent.delete(seq);
+      readQueued();
       const stopped = await interruptReply(path, inbox.name, typist);
       if (stopped.seq !== null) await note("(stopping the reply)\n");
     })().catch((error: unknown) => {
@@ -775,7 +836,12 @@ export async function inboxChat(
   // With the chat's look on a terminal, the prompt's box stays up while a turn runs.
   const editor =
     view !== null && atTerminal(io)
-      ? terminal.lineEditor({ hint: view.hint, list: host.rows?.list, commands: menu })
+      ? terminal.lineEditor({
+          hint: view.hint,
+          list: host.rows?.list,
+          commands: menu,
+          queued: () => queued.map((each) => draftLabel(each.draft)),
+        })
       : null;
   // Opens a row of `host.rows` without waiting for the user to leave it: the chat goes on meanwhile
   // (its prompt queues behind the row's screen), and only a failure stops it.
@@ -867,6 +933,8 @@ export async function inboxChat(
     const onEvent = (event: RunEvent) => {
       view?.onEvent(event);
       if (!(event instanceof NodeSucceeded)) return;
+      // A take that starts a turn may have read queued lines.
+      readQueued();
       if (event.nodeId.slice(event.nodeId.lastIndexOf("/") + 1) !== "reply") return;
       // An interrupted reply succeeds with null when its output is `Optional(...)`.
       if (event.interrupted) return note("(interrupted)\n");
@@ -891,19 +959,59 @@ export async function inboxChat(
       signal: stop.signal,
       scheduler,
     };
+    /** Close the inbox and the queue, as `/exit` does: a take of both waits while either is open. */
+    const closeInboxes = async (): Promise<void> => {
+      for (const name of queue === null ? [inbox.name] : [inbox.name, queue]) await close(path, name, typist);
+    };
+    /** A send from the input box failed: a refusal is noted, unless the run has ended; else the chat stops. */
+    const liveFailed = async (error: unknown): Promise<void> => {
+      if (!(error instanceof DeliveryRefused)) return stop.abort(error);
+      if (error.reason === "ended") return;
+      await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
+    };
+    /**
+     * Take back the queued lines a take hasn't read, after the lines entered before; return what
+     * the box held for each, in the order sent.
+     */
+    const takeBackQueued = async (): Promise<Draft[]> => {
+      if (queued.length === 0) return [];
+      const events = queued.map((each) => each.seq);
+      const back = new Set((await withdraw(path, queue!, { ...typist, events })).withdrawn.map((each) => each.seq));
+      const drafts = queued.filter((each) => back.has(each.seq)).map((each) => each.draft);
+      dropQueued(back);
+      // The rest a take read.
+      readQueued();
+      return drafts;
+    };
+    /** `/exit` leaves: no reply comes after it, so each queued line is taken back and printed. */
+    const printQueued = async (): Promise<void> => {
+      for (const each of await takeBackQueued()) await note(`(not sent: ${sanitize(draftLabel(each))})\n`);
+    };
     /**
      * Send `entered`, entered in the input box while a turn runs, after the lines entered before
-     * it: to the inbox at once (an agent reading it as its steer inbox reads it), its tokens
-     * expanded, or, for `/exit` or `/quit`, close the inbox as the prompt does. A blank line isn't
-     * sent. The echo shows the tokens.
+     * it: to the inbox at once (an agent reading it as its steer inbox reads it), or with `queuing`
+     * to `host.queue`, drawn above the box until a take reads it; its tokens expanded. While a host
+     * command waits for the turn's end, a line queued is refused and stays in the box. `/exit` or
+     * `/quit` closes the inboxes as the prompt does. A blank line isn't sent. The echo of a line
+     * sent at once shows the tokens.
      */
-    const sendLive = (entered: Draft): void => {
+    const sendLive = (entered: Draft, queuing = false): void => {
       const line = draftText(entered);
       if (line.trim() === "") return;
-      view?.echo(draftLabel(entered));
+      // A command, `/exit` included, runs as it does on Enter.
+      const command = hostCommands.has(line.trim()) || EXIT_LINES.has(line.trim());
+      const to = queuing && queue !== null && !command ? queue : inbox.name;
+      // The command runs once the queued turns have ended: a line queued after it would run first.
+      if (to !== inbox.name && heldCommand !== null) {
+        editor?.set(entered);
+        void note(`(not queued: ${heldCommand} runs first; the line stays in the box)\n`).catch(() => {});
+        return;
+      }
+      if (to === inbox.name) view?.echo(draftLabel(entered));
       if (hostCommands.has(line.trim())) {
         heldCommand = line.trim();
-        void note(`(${heldCommand} once the reply ends)\n`).catch(() => {});
+        const after = queued.length > 0 ? "the reply and the queued lines' turn end" : "the reply ends";
+        void note(`(${heldCommand} once ${after})\n`).catch(() => {});
         return;
       }
       const exit = EXIT_LINES.has(line.trim());
@@ -921,22 +1029,38 @@ export async function inboxChat(
             // Held for good: no line comes to send it before.
             await holdNews();
             await printHeld();
+            await printQueued();
             closed = true;
-            await close(path, inbox.name, typist);
+            await closeInboxes();
             return;
           }
           // The hold ends with this line, which the run reads after the news held.
           await releaseNews();
           const event = lineEvent(line, inbox.message);
-          const seq = await deliver(path, inbox.name, event, typist);
+          const seq = await deliver(path, to, event, typist);
           liveSeqs.push(seq);
-          sent.set(seq, entered);
+          if (to === inbox.name) return void sent.set(seq, entered);
+          queued.push({ seq, draft: entered });
+          // A take may have read it as it landed, in a commit a look has read already.
+          lookedTo = Math.min(lookedTo, seq);
+          readQueued();
+          view?.refresh();
         })
-        .catch(async (error: unknown) => {
-          if (!(error instanceof DeliveryRefused)) return stop.abort(error);
-          if (error.reason === "ended") return;
-          await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
-        });
+        .catch(liveFailed);
+    };
+    /**
+     * Take the queued lines back into the input box, a line each before what it holds, after the
+     * lines entered before; those a take has read stay read.
+     */
+    const recallQueued = (): void => {
+      liveSends = liveSends
+        .then(async () => {
+          const drafts = await takeBackQueued();
+          if (drafts.length === 0) return;
+          editor!.set(joinDrafts([...drafts, editor!.draft()], "\n"));
+          view?.refresh();
+        })
+        .catch(liveFailed);
     };
     /** A key at the input box while a turn runs; false for one it leaves to `watchKeys` (Esc). */
     let refreshing = false;
@@ -949,7 +1073,9 @@ export async function inboxChat(
       if (action !== null && "value" in action) {
         const entered = editor!.draft();
         editor!.set("");
-        sendLive(entered);
+        sendLive(entered, action.queue === true);
+      } else if (action !== null && "recall" in action) {
+        recallQueued();
       } else if (action !== null && "open" in action) {
         openRow(action.open);
       }
@@ -1060,7 +1186,8 @@ export async function inboxChat(
       await holdNews();
       await printHeld();
       try {
-        await close(path, inbox.name, typist);
+        await printQueued();
+        await closeInboxes();
       } catch (error) {
         if (!(error instanceof DeliveryRefused && error.reason === "ended")) throw error;
       }

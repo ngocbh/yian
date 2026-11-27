@@ -20,7 +20,7 @@ import {
 } from "../../src/cli/chat_sessions.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { advance, close, runFlow, runLogPath, send } from "../../src/run.ts";
+import { advance, close, runFlow, runLogPath, send, withdraw } from "../../src/run.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
@@ -57,9 +57,10 @@ const SKILL = new Skill({ name: "composing-agents", description: "Compose.", ins
 const line = (text: string) => ({ role: "user", parts: [{ type: "text", text }] });
 
 /**
- * Run a chat `runId` in `folder`: send each of `sent` (a line, or a message) and advance after
- * each, the model replying `re: <n>` to the n-th, and naming the chat `name` after its first
- * reply; close it when `end`. `inputs` go to its start. Returns its log.
+ * Run a chat `runId` in `folder`: send each of `sent` (a line, or a message), then each line of
+ * `queued` to its queue, and advance after each, the model replying `re: <n>` to the n-th, and
+ * naming the chat `name` after its first reply; queue each of `withdrawn` and take it back; close
+ * it when `end`. `inputs` go to its start. Returns its log.
  */
 async function chatRun(
   runId: string,
@@ -70,14 +71,18 @@ async function chatRun(
     parent = null,
     name = "A named chat",
     inputs = {},
+    queued = [],
+    withdrawn = [],
   }: {
     end?: boolean;
     parent?: string | null;
     name?: string;
     inputs?: Record<string, unknown>;
+    queued?: readonly string[];
+    withdrawn?: readonly string[];
   } = {},
 ): Promise<string> {
-  const replies = sent.flatMap((each, i) => {
+  const replies = [...sent, ...queued].flatMap((each, i) => {
     if (typeof each !== "string" && chosenModel(each, "the user") !== null) return [];
     return [textReply(`re: ${i + 1}`)];
   });
@@ -103,8 +108,17 @@ async function chatRun(
     await send(log, "owner_messages", typeof each === "string" ? line(each) : each);
     await advance({ ...options, log });
   }
+  for (const each of queued) {
+    await send(log, "queued", line(each));
+    await advance({ ...options, log });
+  }
+  for (const each of withdrawn) {
+    const seq = await send(log, "queued", line(each));
+    await withdraw(log, "queued", { events: [seq] });
+  }
   if (end) {
     await close(log, "owner_messages");
+    await close(log, "queued");
     expect((await advance({ ...options, log })).status).toBe("succeeded");
   }
   return log;
@@ -162,20 +176,23 @@ test(
     // and named once: the next turn makes no naming call, which the script would run out on.
     await chatRun("unnamed", root, ["hello", "again"], { name: '"\u200b"' });
     await chatRun("seeded", root, ["go on"], { inputs: { title: "Fixing the parser" } });
+    await chatRun("queued", root, ["fix my parser"], { queued: ["and its tests"], withdrawn: ["never mind"] });
     const sessions = chatSessions(runsDir, root);
     const shown = sessions.map((each) => [each.runId, each.title, each.firstLine, each.messages]);
     expect(shown).toEqual([
+      // A line queued for the next turn counts as one the user typed; one taken back doesn't.
+      ["queued", "A named chat", "fix my parser", 4],
       // A chat going on from a named one keeps its name, with no call to name it.
       ["seeded", "Fixing the parser", "go on", 2],
       ["unnamed", "", "hello", 4],
       // The user's two lines and the two replies.
       ["named", "Fixing the parser", "fix my parser", 4],
     ]);
-    const seed = await sessionSeed(sessions[2]!, runsDir, NO_ENV);
+    const seed = await sessionSeed(sessions[3]!, runsDir, NO_ENV);
     expect(seed.title).toBe("Fixing the parser");
     expect(seed.messages).toBe(4);
     // A chat that tried keeps its empty name, so the one going on from it isn't named either.
-    expect((await sessionSeed(sessions[1]!, runsDir, NO_ENV)).title).toBe("");
+    expect((await sessionSeed(sessions[2]!, runsDir, NO_ENV)).title).toBe("");
   },
   TIMEOUT,
 );

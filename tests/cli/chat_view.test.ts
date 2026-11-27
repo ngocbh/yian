@@ -72,6 +72,8 @@ import {
 import {
   CTRL_C,
   CTRL_L,
+  CTRL_U,
+  CTRL_X,
   DOWN,
   ENTER,
   ESCAPE,
@@ -81,6 +83,7 @@ import {
   PASTE_START,
   screen,
   tick,
+  UP,
 } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 20_000;
@@ -1575,6 +1578,300 @@ describe("the input box after a line is entered while a reply runs", () => {
       expect(model.requests.some((request) => asked(request, "make it short"))).toBe(false);
       stdin.write(`\x15/exit${ENTER}`);
       expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("a line queued in the input box while a reply runs", () => {
+  const SPINNER = "· Thinking… (0s · xai/grok-4.3 · esc to interrupt)";
+  /** Alt+Enter, as a terminal sends it: Enter merged with an Escape. */
+  const ALT_ENTER = `${ESCAPE}${ENTER}`;
+  const queuedRow = (text: string) => `  queued: ${text}`;
+  /** The texts of a request's user messages. */
+  const userTexts = (request: Request) =>
+    request.messages.filter((message) => message.role === "user").map((message) => message.text());
+  const chatRecords = () => readRunLog(join(tmp, "chat.jsonl")).map((envelope) => envelope.record);
+
+  /** Start a chat on a GatedModel and have its first reply streaming, the box under it. */
+  async function replying() {
+    const { io, stdin, rows } = terminalIo();
+    const model = new GatedModel();
+    const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+    await until(() => rows().includes(HINT));
+    stdin.write(`tell me a story${ENTER}`);
+    await until(() => rows().includes("⏺ Once upon"));
+    return { stdin, rows, model, chatting };
+  }
+
+  /** A model whose n-th reply streams `part n`, then ends once `open(n)` or a cut lets it. */
+  class Gates implements ChatModel {
+    readonly provider = "xai";
+    readonly model = "grok-4.3";
+    readonly requests: Request[] = [];
+    readonly #gates = Array.from({ length: 4 }, () => Promise.withResolvers<void>());
+    open(n: number) {
+      this.#gates[n - 1]!.resolve();
+    }
+    stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+      if (namingRequest(request)) return new ScriptedModel([textReply("A chat")], this).stream(request, options);
+      this.requests.push(request);
+      const n = this.requests.length;
+      const gate = this.#gates[n - 1]!.promise;
+      const cut = new Promise((resolve) => options.signal?.addEventListener("abort", resolve, { once: true }));
+      async function* events() {
+        yield new TextDelta(0, `part ${n}`);
+        await Promise.race([gate, cut]);
+        yield new PartDone(0, new TextPart(`part ${n}`));
+        yield new Finish({ reason: "stop" });
+      }
+      return new EventStream(events());
+    }
+  }
+
+  test(
+    "waits above the box, and the next turn reads every one in order, after the reply",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      // Alt+Enter, and Ctrl-X then Enter for a terminal without Alt.
+      stdin.write(`then a poem${ALT_ENTER}and a joke${CTRL_X}${ENTER}`);
+      await until(() => rows().includes(queuedRow("and a joke")));
+      const box = [TOP, row(">"), BOTTOM, HINT];
+      expect(rows().slice(-7)).toEqual([SPINNER, queuedRow("then a poem"), queuedRow("and a joke"), ...box]);
+      model.open();
+      await until(() => model.requests.length === 2 && prompting(rows()));
+      // The reply never read them as steers: its one call is all it made.
+      expect(userTexts(model.requests[0]!)).toEqual(["tell me a story"]);
+      expect(userTexts(model.requests[1]!).slice(-2)).toEqual(["then a poem", "and a joke"]);
+      const shown = rows();
+      expect(shown.some((line) => line.startsWith("  queued:"))).toBe(false);
+      expect(shown.slice(shown.indexOf("⏺ Once upon a time."), shown.indexOf("⏺ Short."))).toEqual([
+        "⏺ Once upon a time.",
+        "",
+        "> then a poem",
+        "> and a joke",
+        "",
+      ]);
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "leaves Enter steering the reply, and waits for the turn after it",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      stdin.write(`add a moral${ALT_ENTER}`);
+      await until(() => rows().includes(queuedRow("add a moral")));
+      stdin.write(`make it short${ENTER}`);
+      await until(() => rows().includes("> make it short"));
+      model.open();
+      await until(() => model.requests.length === 3 && prompting(rows()));
+      // The reply's next step reads the steer, and only the next turn the queued line.
+      expect(asked(model.requests[1]!, "make it short")).toBe(true);
+      expect(asked(model.requests[1]!, "add a moral")).toBe(false);
+      expect(userTexts(model.requests[2]!).at(-1)).toBe("add a moral");
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "comes back into the box with Up from its first row, a line each before what it holds, and Enter then steers it",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      stdin.write(`use rhymes${ALT_ENTER}add a moral${ALT_ENTER}`);
+      await until(() => rows().includes(queuedRow("add a moral")));
+      stdin.write(`now${UP}`);
+      await until(() => rows().includes(row("> use rhymes⏎add a moral⏎now")));
+      expect(rows().some((line) => line.startsWith("  queued:"))).toBe(false);
+      const withdrawn = chatRecords().filter((record) => record instanceof InboxWithdrawnRecord);
+      const taken = withdrawn.map((record) => [record.inbox, record.events.length, record.chosen]);
+      expect(taken).toEqual([["queued", 2, true]]);
+      stdin.write(ENTER);
+      model.open();
+      await until(() => model.requests.length === 2 && prompting(rows()));
+      expect(lastSaid(model.requests[1]!)).toBe("use rhymes\nadd a moral\nnow");
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      // No turn read them from the queue.
+      expect(model.requests).toHaveLength(2);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "is deleted by taking it back with Up and clearing the box: no turn reads it",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      stdin.write(`use rhymes${ALT_ENTER}`);
+      await until(() => rows().includes(queuedRow("use rhymes")));
+      stdin.write(UP);
+      await until(() => rows().includes(row("> use rhymes")));
+      stdin.write(CTRL_U);
+      await until(() => rows().includes(row(">")));
+      model.open();
+      await until(() => prompting(rows()));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      expect(model.requests).toHaveLength(1);
+      expect(model.requests.some((request) => asked(request, "use rhymes"))).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "stays queued on Enter on an empty box, which sends nothing",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      stdin.write(`use rhymes${ALT_ENTER}`);
+      await until(() => rows().includes(queuedRow("use rhymes")));
+      stdin.write(`${ENTER}${ENTER}`);
+      await pastGrace();
+      expect(rows()).toContain(queuedRow("use rhymes"));
+      expect(chatRecords().some((record) => record instanceof InboxWithdrawnRecord)).toBe(false);
+      model.open();
+      await until(() => model.requests.length === 2 && prompting(rows()));
+      expect(asked(model.requests[0]!, "use rhymes")).toBe(false);
+      expect(userTexts(model.requests[1]!).at(-1)).toBe("use rhymes");
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "is refused while a command waits for the reply's end, staying in the box; one queued before has its turn first",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      stdin.write(`/resume${ENTER}`);
+      await until(() => rows().includes("(/resume once the reply ends)"));
+      stdin.write(`add a moral${ALT_ENTER}`);
+      await until(() => rows().includes("(not queued: /resume runs first; the line stays in the box)"));
+      expect(rows()).toContain(row("> add a moral"));
+      expect(rows().some((line) => line.startsWith("  queued:"))).toBe(false);
+      model.open();
+      await until(() => rows().includes("(no earlier yian chat in this folder to resume)") && prompting(rows()));
+      expect(model.requests).toHaveLength(1);
+      expect(rows()).toContain(row("> add a moral"));
+      stdin.write(`\x15/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      const sent = chatRecords().filter((record) => record instanceof PoolCommitRecord && record.key === "__start__.queued");
+      expect(sent).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "typed before a command, has its turn before the command runs, as the command's note says",
+    async () => {
+      const model = new Gates();
+      const { io, stdin, rows } = terminalIo();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ part 1"));
+      stdin.write(`add a moral${ALT_ENTER}`);
+      await until(() => rows().includes(queuedRow("add a moral")));
+      stdin.write(`/resume${ENTER}`);
+      await until(() => rows().includes("(/resume once the reply and the queued lines' turn end)"));
+      model.open(1);
+      await until(() => model.requests.length === 2);
+      model.open(2);
+      await until(() => rows().includes("(no earlier yian chat in this folder to resume)") && prompting(rows()));
+      const shown = rows();
+      expect(shown.indexOf("⏺ part 2")).toBeLessThan(shown.indexOf("(no earlier yian chat in this folder to resume)"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "is taken back by Esc too, with the lines sent, in the order sent: no turn starts on it",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      stdin.write(`add a moral${ALT_ENTER}make it short${ENTER}`);
+      await until(() => rows().includes("> make it short"));
+      stdin.write(ESCAPE);
+      await until(() => rows().includes("(withdrew 2 messages; back in the prompt)"));
+      expect(rows()).toContain(row("> add a moral make it short"));
+      expect(rows().some((line) => line.startsWith("  queued:"))).toBe(false);
+      model.open();
+      await until(() => prompting(rows()));
+      expect(model.requests).toHaveLength(1);
+      stdin.write(`\x15/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "is left by Ctrl-C, which stops the reply, for the next turn to read",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      stdin.write(`add a moral${ALT_ENTER}`);
+      await until(() => rows().includes(queuedRow("add a moral")));
+      stdin.write(CTRL_C);
+      await until(() => rows().some((line) => line.startsWith("(interrupting the reply")));
+      // It takes nothing back: the line still waits above the box.
+      expect(rows()).toContain(queuedRow("add a moral"));
+      expect(chatRecords().some((record) => record instanceof InboxWithdrawnRecord)).toBe(false);
+      model.open();
+      await until(() => model.requests.length === 2 && prompting(rows()));
+      expect(userTexts(model.requests[1]!).at(-1)).toBe("add a moral");
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "lets a second Ctrl-C soon after stop the turn it starts, rather than end the chat",
+    async () => {
+      const model = new Gates();
+      const { io, stdin, rows } = terminalIo();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ part 1"));
+      stdin.write(`add a moral${ALT_ENTER}`);
+      await until(() => rows().includes(queuedRow("add a moral")));
+      const interrupting = () => rows().filter((line) => line.startsWith("(interrupting the reply")).length;
+      stdin.write(CTRL_C);
+      await until(() => interrupting() === 1);
+      model.open(1);
+      await until(() => model.requests.length === 2 && rows().includes("> add a moral"));
+      // The queued turn starts as a line sent does: this press interrupts it.
+      stdin.write(CTRL_C);
+      await until(() => interrupting() === 2);
+      model.open(2);
+      await until(() => prompting(rows()));
+      expect(rows()).not.toContain("chat cancelled");
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "/exit takes it back and prints it as not sent, closes both inboxes, and no turn reads it",
+    async () => {
+      const { stdin, rows, model, chatting } = await replying();
+      stdin.write(`add a moral${ALT_ENTER}`);
+      await until(() => rows().includes(queuedRow("add a moral")));
+      stdin.write(`/exit${ENTER}`);
+      await until(() => rows().includes("(not sent: add a moral)"));
+      model.open();
+      expect(await chatting).toBe(0);
+      const records = chatRecords();
+      const closed = records.filter((record) => record instanceof InboxClosedRecord);
+      expect(closed.map((record) => record.inbox)).toEqual(["owner_messages", "queued"]);
+      expect(records.filter((record) => record instanceof InboxWithdrawnRecord).map((record) => record.inbox)).toEqual(["queued"]);
+      expect(model.requests).toHaveLength(1);
+      expect(rows().at(-1)).toBe("session ended");
     },
     TIMEOUT,
   );

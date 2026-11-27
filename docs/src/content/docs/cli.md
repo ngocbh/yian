@@ -275,19 +275,27 @@ theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered l
 | Key | What it does |
 |---|---|
 | Enter | Sends the line. During a reply, the assistant reads it before its next step |
-| Esc | Takes back the lines you sent that the assistant hasn't read yet, and stops the reply. What you did yourself, such as a `/model` choice, stays sent, and the flows' reports wait for your next line |
-| Ctrl-C | Stops the reply, and the flows' reports wait for your next line. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
+| Alt+Enter, or Ctrl-X then Enter | During a reply, queues the line for the next turn. Elsewhere, sends it as Enter does. On macOS, Terminal.app and iTerm2 send Option+Enter as a plain Enter unless Option is set to act as Meta (or Esc+), and Windows Terminal takes Alt+Enter for full screen: use Ctrl-X then Enter there |
+| ↑ on the box's first row | Takes the queued lines back into the box, each on a line of its own, before what it holds |
+| Esc | Takes back the lines you sent or queued that the assistant hasn't read yet, and stops the reply. What you did yourself, such as a `/model` choice, stays sent, and the flows' reports wait for your next line |
+| Ctrl-C | Stops the reply, and the flows' reports wait for your next line; the lines you queued start the next turn. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
 | `/` | Lists the commands |
 | `/model` | Picks the model of the next replies, and of the flows the assistant starts after it, from your logins |
 | `/provider` | Picks a provider, signing in to it as `yian auth` does when it has no saved login, then one of its models. A key set in the environment is saved only if you say so |
 | `/resume` | Ends this chat, as `/exit` does, and goes on from an earlier chat in this folder in a new one; its waiting flows stay as they are |
-| `/exit`, `/quit` or Ctrl-D | Leaves the chat |
+| `/exit`, `/quit` or Ctrl-D | Leaves the chat. The lines you queued are taken back and printed as `(not sent: ...)` |
 | Ctrl-L | Rerenders the screen |
 | ↓, ↑ | Move between the box and the list of running flows under it |
 | Enter on a flow | Opens its view (see [A flow's view](#a-flows-view)) |
 | Esc in the list | Goes back to the box |
 
 A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistant gets all of it.
+
+A queued line shows above the box as `queued: ...` until a turn reads it. Once the reply ends, the
+next turn reads every queued line, in the order you sent them, with any lines the reply didn't
+read. To move one into the running reply, take it back with ↑ and press Enter; to delete one, take
+it back and delete its line. A command such as `/model` entered during a reply runs once the reply
+and the queued lines' turn end, and a line can't be queued after it until it has run.
 
 What you do yourself, such as choosing a model with `/model`, reaches the assistant as your action,
 signed `the user`. It starts no reply: the assistant reads it with your next message, and a

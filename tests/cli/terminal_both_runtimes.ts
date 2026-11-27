@@ -43,6 +43,7 @@ export const CTRL_N = "\x0e";
 export const CTRL_P = "\x10";
 export const CTRL_Q = "\x11";
 export const CTRL_U = "\x15";
+export const CTRL_X = "\x18";
 export const BACKSPACE = "\x7f";
 export const SPACE = " ";
 export const ESCAPE = "\x1b";
@@ -675,6 +676,74 @@ async function aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile(): Promi
   await tick();
   input.write(ENTER);
   assert.equal(await after, "Approve");
+}
+
+async function altEnterAndCtrlXEnterQueueTheLiveBoxsLineAndUpOnItsFirstRowRecalls(): Promise<void> {
+  const { input, terminal } = setup({ tty: true });
+  let queued: string[] = [];
+  const editor = new LineEditor({ columns: () => 30, hint: "", queued: () => queued });
+  const actions: unknown[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    (key) => actions.push(key),
+    (key) => {
+      const action = editor.key(key);
+      if (action !== null) actions.push(action);
+      // As the chat's box does: a line entered leaves it.
+      if (action !== null && "value" in action) editor.set("");
+      return true;
+    },
+  );
+  // Alt+Enter arrives as Enter merged with an Escape; it queues rather than counting as an Escape.
+  input.write(`one${ESCAPE}${ENTER}`);
+  await tick();
+  input.write(`two${CTRL_X}${ENTER}`);
+  await tick();
+  input.write(`three${ENTER}`);
+  await tick();
+  // Ctrl-X before another key leaves that key as it is.
+  input.write(`${CTRL_X}a${ENTER}`);
+  await tick();
+  assert.deepEqual(actions, [
+    { value: "one", queue: true },
+    { value: "two", queue: true },
+    { value: "three" },
+    { value: "a" },
+  ]);
+  editor.set("");
+  actions.length = 0;
+  // Up recalls only while lines are queued, and only from the box's first row.
+  input.write(UP);
+  await tick();
+  queued = ["one"];
+  input.write("x".repeat(30) + UP);
+  await tick();
+  assert.deepEqual(actions, []);
+  editor.set("y");
+  input.write(UP);
+  await tick();
+  assert.deepEqual(actions, [{ recall: true }]);
+  watch.abort();
+}
+
+async function aFramedPromptDrawsTheQueuedLinesAboveItsBoxAndAltEnterEntersItsLine(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, queued: () => ["fix the tests", "a\nb"] });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  await tick();
+  assert.deepEqual(view().rows, [
+    "  queued: fix the tests",
+    "  queued: a⏎b",
+    FRAME_TOP,
+    framed(">"),
+    FRAME_BOTTOM,
+    `  ${HINT}`,
+  ]);
+  assert.deepEqual(view().cursor, { row: 3, col: 4 });
+  // At a prompt nothing replies, so Alt+Enter enters the line as Enter does.
+  input.write(`now${ESCAPE}${ENTER}`);
+  assert.deepEqual(await line, { value: "now" });
 }
 
 async function aLinePromptAfterAWithdrawnCardTakesKeysAtOnce(): Promise<void> {
@@ -4331,6 +4400,10 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "approve preselects the choice it names": approvePreselectsTheChoiceItNames,
   "a prompt opening while the live box takes keys drops them for a while":
     aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile,
+  "Alt+Enter and Ctrl-X Enter queue the live box's line, and Up on its first row recalls":
+    altEnterAndCtrlXEnterQueueTheLiveBoxsLineAndUpOnItsFirstRowRecalls,
+  "a framed prompt draws the queued lines above its box, and Alt+Enter enters its line":
+    aFramedPromptDrawsTheQueuedLinesAboveItsBoxAndAltEnterEntersItsLine,
   "a line prompt after a withdrawn card takes keys at once":
     aLinePromptAfterAWithdrawnCardTakesKeysAtOnce,
   "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,

@@ -11,7 +11,7 @@ import { acceptsNull, type CallView, HostToolCall, NodeSteps } from "../../src/n
 import { toolCallId } from "../../src/tools/context.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { noGrowth, RUN_ID } from "../helpers/run_state_fixtures.ts";
-import { InterruptedRecord, NodeWokenRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
+import { InterruptedRecord, NodeStartedRecord, NodeWokenRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import {
   commitPrepared,
@@ -120,7 +120,7 @@ test("deliver(interrupt) names the opened running reader and aborts its signal i
   expect(seq).not.toBeNull();
   // Before any await.
   expect(probe.opened!.interrupt.aborted).toBe(true);
-  expect(probe.opened!.interruptedBy()).toBe(seq);
+  expect([probe.opened!.interruptedBy(), probe.opened!.interruptedSince()]).toEqual([seq, seq]);
   const record = engine.log.records().at(-1)!.record as InterruptedRecord;
   expect([record.inbox, [...record.nodes]]).toEqual(["m", ["p"]]);
   probe.release();
@@ -301,7 +301,11 @@ test("a reader that opens while a Stop stands gets an applied interrupted record
   expect([(applied.record as InterruptedRecord).inbox, [...(applied.record as InterruptedRecord).nodes]]).toEqual(["m", ["p"]]);
   expect(probe.opened!.interrupt.aborted).toBe(true);
   expect(probe.opened!.interruptedBy()).toBe(host.seq! + 1);
-  expect(engine.state.waits.stops.get("m")).toEqual({ seq: host.seq! + 1, stopped: true, by: null });
+  // The Stop keeps the host's seq. The reader began before it, but took it as it opened, before it
+  // could start a call: its start counts as one that began with the interrupt.
+  expect(engine.state.waits.stops.get("m")).toEqual({ seq: host.seq!, stopped: true, by: null });
+  const began = engine.log.records().find(({ record }) => record instanceof NodeStartedRecord && record.nodeId === "p")!.seq;
+  expect(probe.opened!.interruptedSince()).toBe(began - 1);
   probe.release();
   await running;
   expect(engine.state.pool.store.get("p")!.toObject()).toBe(true);
@@ -435,6 +439,9 @@ test("a host interrupt while the Stop stands appends nothing; a reader opening a
   await running;
 });
 
+/** The seq of the host's `interrupted` record, the first of the log of `engine`. */
+const hostStop = (engine: FlowEngine) => engine.log.records().find(({ record }) => record instanceof InterruptedRecord)!.seq;
+
 /** A chain run of `probe` whose log, written by hand, recorded an empty Stop and then `probe`'s start, then crashed. */
 function crashedAfterStart(probe: Node) {
   const engine = chain(probe);
@@ -457,6 +464,8 @@ test("a crash before the applied record: the resumed reader opens and gets it", 
     ["m", ["p"]],
   ]);
   expect(probe.opened!.interrupt.aborted).toBe(true);
+  // The start the crash cut began after the Stop, so it could start nothing before taking it.
+  expect(probe.opened!.interruptedSince()).toBe(hostStop(engine));
   probe.release();
   await running;
 });
@@ -476,6 +485,7 @@ test("a crash after the applied record: the resumed reader holds the interrupt; 
   ]);
   expect(probe.opened!.interrupt.aborted).toBe(true);
   expect(probe.opened!.interruptedBy()).toBe(applied.expectedSequence);
+  expect(probe.opened!.interruptedSince()).toBe(hostStop(engine));
   probe.release();
   await running;
 });

@@ -60,7 +60,7 @@ import { applyWaitsRecord, nodeCalls, type WaitInfo, WaitsState, wakeableNodes, 
 const INDEX_FILE = "index.sqlite";
 
 /** The index layout's version. */
-const INDEX_VERSION = 11;
+const INDEX_VERSION = 12;
 
 /**
  * What `PRAGMA user_version` holds: the layout version and the run-log schema the stored scans

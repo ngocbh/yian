@@ -539,9 +539,9 @@ const next = await advance({ log, tools, beforeToolCall });
   closed, but not the released calls. `cancel` closes holds too.
 - A stop or crash after the agent woke for a released call and before its result is recorded,
   where a graceful shutdown often lands, means it may have started: a resumable tool is sent again
-  with the same `ctx.callId` and its next `ctx.attempt`, and any other is closed `crashed`. A crash
-  just as the agent starts with an interrupt sent while the run was down also sends a resumable
-  call again, despite the interrupt.
+  with the same `ctx.callId` and its next `ctx.attempt`, and any other is closed `crashed`. An
+  interrupt sent while the run was down skips a released call that no evaluation could have
+  started yet, even when a crash cuts the agent just as it starts.
 - A call sent again after a crash can't be held, since it may have run: when the hook answers
   `pending()` for it, it is closed `crashed`, with a warning.
 

@@ -136,7 +136,7 @@ function steer(event: string): void {
 }
 
 /** A steer inbox opener that never has anything queued, for a node driven without an engine. */
-const NO_STEERS = (inbox: string): SteerInbox => ({ inbox, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null, onSend: () => () => {} });
+const NO_STEERS = (inbox: string): SteerInbox => ({ inbox, queuedBesidesActions: () => false, read: () => null, interrupt: new AbortController().signal, interruptedBy: () => null, interruptedSince: () => null, onSend: () => () => {} });
 
 /**
  * One loaded `chat` agent granted `tools`, output `${chat.output}`; with
@@ -533,6 +533,7 @@ function countingInbox() {
     inbox: "notes",
     interrupt: interrupt.signal,
     interruptedBy: () => by,
+    interruptedSince: () => by,
     onSend: (listener) => (listeners.add(listener), () => void listeners.delete(listener)),
     queuedBesidesActions: () => queue.length > 0,
     read: () => (queue.length === 0 ? null : { n: 0, from: queue.map((_, index) => 100 + index), values: queue.splice(0) }),

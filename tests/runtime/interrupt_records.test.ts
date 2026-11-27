@@ -369,7 +369,8 @@ test("prepareAppliedStop names the opener and each waiting reader without an int
 test("an applied Stop carries the standing Stop's by; a replayed one carrying another is refused", () => {
   const run = readersFlow();
   const { log, state } = run;
-  commitPrepared(log, state, prepareInterrupt(state, "msgs", [], ADA)!);
+  const host = prepareInterrupt(state, "msgs", [], ADA)!;
+  commitPrepared(log, state, host);
   startUpTo(run, "a");
   const prepared = prepareAppliedStop(state, "msgs", "a");
   expect((prepared.record as InterruptedRecord).by).toEqual(ADA);
@@ -377,7 +378,7 @@ test("an applied Stop carries the standing Stop's by; a replayed one carrying an
     "Interrupted while a Stop stands on 'msgs' must carry that Stop's by",
   );
   commitPrepared(log, state, prepared);
-  expect(state.waits.stops.get("msgs")).toEqual({ seq: prepared.expectedSequence, stopped: true, by: ADA });
+  expect(state.waits.stops.get("msgs")).toEqual({ seq: host.expectedSequence, stopped: true, by: ADA });
 });
 
 test("prepareAppliedStop refusals: unknown inbox, not started, ended", () => {
@@ -550,10 +551,26 @@ describe("stops", () => {
     expect(fold(...START, new NodeStartedRecord("reply"), stop("msgs", ["reply"])).stops.get("msgs")).toEqual({ seq: 3, stopped: true, by: null });
     // A replayed empty record after a stopping one doesn't reset stopped (so it can't outlive the next wait).
     expect(fold(...START, new NodeStartedRecord("reply"), stop("msgs", ["reply"]), stop("msgs")).stops.get("msgs")).toEqual({
-      seq: 4,
+      seq: 3,
       stopped: true,
       by: null,
     });
+  });
+
+  test("the record the run applies for a Stop keeps its seq, which the in-flight reader it names holds until it honors or settles", () => {
+    // 2 the host's Stop, 3 reply starts, 4 w waits reading msgs, 5 the applied record naming both.
+    const records = [...START, stop("msgs"), new NodeStartedRecord("reply"), new NodeWaitingRecord("w", ["r/w"], { steerInbox: "msgs" })];
+    const w = fold(...records, stop("msgs", ["reply", "w"]));
+    expect([w.stops.get("msgs"), [...w._appliedStops], [...w.interrupts]]).toEqual([
+      { seq: 2, stopped: true, by: null },
+      [["reply", 2]],
+      [["reply", 5], ["w", 5]],
+    ]);
+    expect([...WaitsState.fromJSON(JSON.parse(JSON.stringify(w.toJSON())))._appliedStops]).toEqual([["reply", 2]]);
+    expect(fold(...records, stop("msgs", ["reply", "w"]), honor("reply", 1, 5))._appliedStops.size).toBe(0);
+    expect(fold(...records, stop("msgs", ["reply", "w"]), new NodeSucceededRecord("reply", 1))._appliedStops.size).toBe(0);
+    // The host's own record names a reader with no Stop standing yet.
+    expect(fold(...START, new NodeStartedRecord("reply"), stop("msgs", ["reply"]))._appliedStops.size).toBe(0);
   });
 
   test("a run_waiting keeps a Stop that stopped no one and clears one that did", () => {
@@ -635,7 +652,7 @@ describe("stops", () => {
     const w = fold(...START, new NodeStartedRecord("reply"), cut);
     expect([w.stops.size, w.interrupts.get("reply")]).toEqual([0, 3]);
     const kept = fold(...START, stop("msgs"), new NodeStartedRecord("reply"), cut);
-    expect(kept.stops.get("msgs")).toEqual({ seq: 2, stopped: false, by: null });
+    expect([kept.stops.get("msgs"), kept._appliedStops.size]).toEqual([{ seq: 2, stopped: false, by: null }, 0]);
   });
 
   test("an interrupted record's by is the Stop's", () => {

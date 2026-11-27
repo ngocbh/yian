@@ -627,6 +627,13 @@ export const CHAT_FLOW_FILE = "chat.yaml";
 export const CHAT_PERSON = "the user";
 
 /**
+ * The inboxes of `yian chat`'s bundled flow: the user's lines and its runs' reports go to the
+ * first; the lines the user queues for the next turn while a reply runs, to the second.
+ */
+export const CHAT_INBOX = "owner_messages";
+export const CHAT_QUEUE = "queued";
+
+/**
  * Reject a flow file or fresh-only options on `--resume`, a fresh run without a flow file, and a
  * `--log` path that already exists or whose folder doesn't. Absent options are `undefined`;
  * `inputValues` is empty when no `--input` is given.

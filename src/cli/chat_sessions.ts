@@ -20,6 +20,7 @@ import { compareCodeUnits } from "../diagnostics.ts";
 import { withWarnings } from "../platform.ts";
 import { foldRunLog } from "../run.ts";
 import {
+  InboxWithdrawnRecord,
   iterRunRecords,
   NodeStepRecord,
   PoolCommitRecord,
@@ -27,7 +28,7 @@ import {
 } from "../runtime/log.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../runtime/run_index.ts";
 import { toHost } from "../typesys/values.ts";
-import { CHAT_FLOW_FILE, CHAT_FLOW_ID, CHAT_PERSON } from "./run.ts";
+import { CHAT_FLOW_FILE, CHAT_FLOW_ID, CHAT_INBOX, CHAT_PERSON, CHAT_QUEUE } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import type { PickChoice } from "./terminal.ts";
 
@@ -136,12 +137,14 @@ const TITLED = /^chat#\d+\/titled\/named$/;
 
 /**
  * Read the session in `log`: its first user line and models; null when it isn't the bundled chat's
- * or the user typed nothing in it. A first pass reads only where the records are; then only the
- * run's start, the sends and the reply's last steps are built.
+ * or the user typed nothing in it. A line taken back (`withdraw`) is no line of the chat's. A first
+ * pass reads only where the records are; then only the run's start, the sends, the withdrawals and
+ * the reply's last steps are built.
  */
 function readSession(row: RunIndexRow, log: string): ChatSession | null {
   let start: Spot | null = null;
-  const sends: Spot[] = [];
+  const sends: (Spot & { seq: number })[] = [];
+  const withdrawals: Spot[] = [];
   const replySteps: Spot[] = [];
   const titled: Spot[] = [];
   let replies = 0;
@@ -150,7 +153,8 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
     const spot = { after };
     const commit = entry.kind === "pool_commit" ? (entry.nodeId ?? "") : null;
     if (entry.kind === "run_started") start = spot;
-    else if (commit === "__start__") sends.push(spot);
+    else if (commit === "__start__") sends.push({ ...spot, seq: entry.seq });
+    else if (entry.kind === "inbox_withdrawn") withdrawals.push(spot);
     else if (commit !== null && ANSWERED.test(commit)) replies++;
     else if (commit !== null && TITLED.test(commit)) titled.push(spot);
     else if (entry.kind === "node_step" && entry.nodeId?.endsWith("/answered/reply")) {
@@ -169,7 +173,15 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
   let lines = 0;
   // The messages it started with, from an earlier chat.
   let seeded = 0;
+  const lineKeys = new Set([`__start__.${CHAT_INBOX}`, `__start__.${CHAT_QUEUE}`]);
+  const taken = new Set(
+    withdrawals.flatMap((spot) => {
+      const record = recordAt(log, spot);
+      return record instanceof InboxWithdrawnRecord ? record.events : [];
+    }),
+  );
   for (const spot of sends) {
+    if (taken.has(spot.seq)) continue;
     const record = recordAt(log, spot);
     if (!(record instanceof PoolCommitRecord)) continue;
     const value = record.value?.value as Record<string, unknown> | undefined;
@@ -178,7 +190,7 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
       title = typeof value?.["title"] === "string" ? value["title"] : title;
       const transcript = value?.["transcript"] as { history?: unknown } | null | undefined;
       seeded = spokenCount(transcript?.history) || seeded;
-    } else if (record.key === "__start__.owner_messages" || record.key === "__start__.queued") {
+    } else if (lineKeys.has(record.key)) {
       const choice = chosenModel(value, CHAT_PERSON);
       if (choice !== null) chosen = choice;
       else if (value?.["author"] == null) {

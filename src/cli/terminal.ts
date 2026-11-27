@@ -337,14 +337,14 @@ export function draftLabel(draft: Draft): string {
 }
 
 /**
- * `drafts` as one draft: those holding anything, a space between them, their tokens numbered
- * afresh from 1, since they become one message.
+ * `drafts` as one draft: those holding anything, `between` (a space by default) between them,
+ * their tokens numbered afresh from 1, since they become one message.
  */
-export function joinDrafts(drafts: readonly Draft[]): Draft {
+export function joinDrafts(drafts: readonly Draft[], between = " "): Draft {
   const joined: (string | PastedText)[] = [];
   let number = 0;
   for (const draft of drafts.filter((each) => each.length > 0 && draftText(each) !== "")) {
-    if (joined.length > 0) joined.push(" ");
+    if (joined.length > 0) joined.push(between);
     for (const part of draft) {
       joined.push(typeof part === "string" ? part : { text: part.text, number: ++number });
     }

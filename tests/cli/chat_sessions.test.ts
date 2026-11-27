@@ -20,7 +20,7 @@ import {
 } from "../../src/cli/chat_sessions.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { advance, close, runFlow, runLogPath, send } from "../../src/run.ts";
+import { advance, close, runFlow, runLogPath, send, withdraw } from "../../src/run.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
@@ -59,8 +59,8 @@ const line = (text: string) => ({ role: "user", parts: [{ type: "text", text }] 
 /**
  * Run a chat `runId` in `folder`: send each of `sent` (a line, or a message), then each line of
  * `queued` to its queue, and advance after each, the model replying `re: <n>` to the n-th, and
- * naming the chat `name` after its first reply; close it when `end`. `inputs` go to its start.
- * Returns its log.
+ * naming the chat `name` after its first reply; queue each of `withdrawn` and take it back; close
+ * it when `end`. `inputs` go to its start. Returns its log.
  */
 async function chatRun(
   runId: string,
@@ -72,12 +72,14 @@ async function chatRun(
     name = "A named chat",
     inputs = {},
     queued = [],
+    withdrawn = [],
   }: {
     end?: boolean;
     parent?: string | null;
     name?: string;
     inputs?: Record<string, unknown>;
     queued?: readonly string[];
+    withdrawn?: readonly string[];
   } = {},
 ): Promise<string> {
   const replies = [...sent, ...queued].flatMap((each, i) => {
@@ -109,6 +111,10 @@ async function chatRun(
   for (const each of queued) {
     await send(log, "queued", line(each));
     await advance({ ...options, log });
+  }
+  for (const each of withdrawn) {
+    const seq = await send(log, "queued", line(each));
+    await withdraw(log, "queued", { events: [seq] });
   }
   if (end) {
     await close(log, "owner_messages");
@@ -170,11 +176,11 @@ test(
     // and named once: the next turn makes no naming call, which the script would run out on.
     await chatRun("unnamed", root, ["hello", "again"], { name: '"\u200b"' });
     await chatRun("seeded", root, ["go on"], { inputs: { title: "Fixing the parser" } });
-    await chatRun("queued", root, ["fix my parser"], { queued: ["and its tests"] });
+    await chatRun("queued", root, ["fix my parser"], { queued: ["and its tests"], withdrawn: ["never mind"] });
     const sessions = chatSessions(runsDir, root);
     const shown = sessions.map((each) => [each.runId, each.title, each.firstLine, each.messages]);
     expect(shown).toEqual([
-      // A line queued for the next turn counts as one the user typed.
+      // A line queued for the next turn counts as one the user typed; one taken back doesn't.
       ["queued", "A named chat", "fix my parser", 4],
       // A chat going on from a named one keeps its name, with no call to name it.
       ["seeded", "Fixing the parser", "go on", 2],

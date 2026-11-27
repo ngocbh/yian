@@ -30,8 +30,10 @@ import {
   prepareRecord,
   prepareRunCancelled,
   prepareRunStarted,
+  prepareRunResumed,
   prepareRunWaiting,
   prepareSend,
+  prepareTakeCommit,
   prepareWithdraw,
   RunState,
   wasWithdrawn,
@@ -309,6 +311,22 @@ test("prepareWithdraw of chosen sends takes only the unread ones, and is null wh
   const y = commitSend(run, "y");
   expect(prepareWithdraw(run.state, "msgs", [x])).toBeNull();
   expect(prepareWithdraw(run.state, "msgs", [x, y])!.record).toEqual(new InboxWithdrawnRecord("msgs", [y], { chosen: true }));
+});
+
+test("a withdraw doesn't reach the sends an orphan take commit read, before or after the resume", () => {
+  const run = started(waitFlow(tool("heard", "take")));
+  const { log, state } = run;
+  const x = commitSend(run, "x");
+  commitPrepared(log, state, prepareNodeStarted(state, "heard"));
+  commitPrepared(log, state, prepareTakeCommit(state, "heard", { inbox: "msgs", events: [x], closed: false }));
+  const y = commitSend(run, "y");
+  // The uncut run's take read x at its commit: only y is unread, before the resume and after it.
+  expect([prepareWithdraw(state, "msgs", [x]), withdrawableEvents(state.waits, "msgs")]).toEqual([null, [y]]);
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  expect([prepareWithdraw(state, "msgs", [x]), withdrawableEvents(state.waits, "msgs")]).toEqual([null, [y]]);
+  expect(() => prepareRecord(state, new InboxWithdrawnRecord("msgs", [x], { chosen: true }))).toThrow(
+    `InboxWithdrawn may name only the unread sends [${y}] of inbox 'msgs', found [${x}]`,
+  );
 });
 
 test("prepareWithdraw of chosen sends refuses unknown_send: no send, another inbox's, or with by another sender's", () => {

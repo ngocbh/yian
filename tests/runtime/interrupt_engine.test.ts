@@ -21,10 +21,12 @@ import {
   prepareNodeStep,
   prepareNodeWaiting,
   prepareRunResumed,
+  prepareSend,
+  prepareTakeCommit,
 } from "../../src/runtime/state.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { InboxRef } from "../../src/typesys/values.ts";
-import { FakeHost, GateNode, inboxEngine, inboxFlow } from "../helpers/inbox_fixtures.ts";
+import { FakeHost, FakeTake, GateNode, inboxEngine, inboxFlow } from "../helpers/inbox_fixtures.ts";
 import { succeed } from "../helpers/waits_fixtures.ts";
 
 /** A node reading steer inbox `inbox` (when `open`): it opens it, waits for `release()`, then returns whether its interrupt signal aborted. */
@@ -452,6 +454,29 @@ function crashedAfterStart(probe: Node) {
   commitPrepared(log, state, prepareNodeStarted(state, probe.id));
   return engine;
 }
+
+test("a Stop made while the process is down after a take read stops the reader after it, as without the crash", async () => {
+  const probe = new InterruptProbe("p");
+  const engine = chain(new FakeTake("heard", "m"), probe);
+  const { log, state } = engine;
+  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
+  succeed(log, state, START_ID, { m: new InboxRef("m"), o: new InboxRef("o") });
+  const hi = commitPrepared(log, state, prepareSend(state, "m", "hi")) && log.nextSequence - 1;
+  commitPrepared(log, state, prepareNodeStarted(state, "heard"));
+  // The process ends after the take's read, before its success; then the person presses Stop.
+  commitPrepared(log, state, prepareTakeCommit(state, "heard", { inbox: "m", events: [hi], closed: false }));
+  commitPrepared(log, state, prepareInterrupt(state, "m")!);
+  commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+  const running = engine.run();
+  await probe.started;
+  probe.release();
+  await running;
+  expect([state.pool.get("heard"), state.pool.get("p"), stopsOf(engine)]).toEqual([
+    { events: ["hi"], closed: false },
+    true,
+    [["m", []], ["m", ["p"]]],
+  ]);
+});
 
 test("a crash before the applied record: the resumed reader opens and gets it", async () => {
   const probe = new InterruptProbe("p");

@@ -146,9 +146,19 @@ test("a steer step removes its from from unread", () => {
 test("an orphan take commit then run_resumed leaves its events unread, for its node alone", () => {
   const w = fold(...START, send("msgs", "x"), new NodeStartedRecord("heard"), takeCommit("heard", [2]), new RunResumedRecord(["heard"], 2));
   expect(unreadEvents(w).get("msgs")).toEqual([2]);
-  expect(availableUnread(w, "msgs")).toEqual([]);
+  expect([availableUnread(w, "msgs"), withdrawableEvents(w, "msgs")]).toEqual([[], []]);
   expect(decideWait(w, "heard", "r/heard", takeAll(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [2], closed: false } });
   expect(decideWait(w, "other", "r/other", takeOne(), AT9)).toMatchObject({ kind: "wait" });
+  // A close since leaves the commit as it was: the uncut run read [2] with the inbox open.
+  applyWaitsRecord(w, { seq: 6, record: new InboxClosedRecord("msgs") });
+  expect(decideWait(w, "heard", "r/heard", takeAll(), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [2], closed: false } });
+});
+
+test("an orphan take commit that read nothing is its node's claim too: a resumed take reads nothing sent since", () => {
+  // seq 2: heard starts; 3: its zero-timeout take of nothing; 4: a send while the process is down; 5: the resume.
+  const w = fold(...START, new NodeStartedRecord("heard"), takeCommit("heard", []), send("msgs", "x"), new RunResumedRecord(["heard"], 0));
+  expect(decideWait(w, "heard", "r/heard", takeOne(0), AT9)).toEqual({ kind: "take", commit: { inbox: "msgs", events: [], closed: false } });
+  expect(availableUnread(w, "msgs")).toEqual([4]);
 });
 
 test("a waiting take's success retires its call and touches no unread event", () => {
@@ -697,9 +707,8 @@ test("an inline take of two inboxes holds its events until its success removes t
   expect(unreadEvents(w)).toEqual(new Map());
 });
 
-test("a resume keeps an inline take of two inboxes for its node: a withdraw takes one event, and the take waiting reads neither", () => {
-  // seq 2: m; 3: q; 4: a starts; 5: a's commit holds both; 6: b waits on both; 7: the resume;
-  // 8: m taken back, which b doesn't lose, so nothing is offered; a takes back q.
+test("a resume keeps an inline take of two inboxes for its node: no withdraw reaches its events, and the take waiting reads neither", () => {
+  // seq 2: m; 3: q; 4: a starts; 5: a's commit holds both; 6: b waits on both; 7: the resume.
   const w = fold(
     ...START,
     send("msgs", "m"),
@@ -708,10 +717,10 @@ test("a resume keeps an inline take of two inboxes for its node: a withdraw take
     new PoolCommitRecord("a", "a", null, { take: { inbox: BOTH, events: [2, 3], closed: [] } }),
     bothWait("b", "one"),
     new RunResumedRecord(["a"], 2),
-    new InboxWithdrawnRecord("msgs", [2]),
   );
+  expect([withdrawableEvents(w, "msgs"), withdrawableEvents(w, "queue")]).toEqual([[], []]);
   expect(nodeCalls(w, "b")[0]).toMatchObject({ state: "open", assigned: [] });
-  expect(decideWait(w, "a", "r/a", bothRequest("all"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [3], closed: [] } });
+  expect(decideWait(w, "a", "r/a", bothRequest("all"), AT9)).toEqual({ kind: "take", commit: { inbox: BOTH, events: [2, 3], closed: [] } });
 });
 
 test("the JSON form keeps a take of two inboxes and its assignments", () => {

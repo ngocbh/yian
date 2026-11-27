@@ -875,6 +875,27 @@ describe("resumes and the terminal", () => {
     expect(state.crashedAttempts.get("heard")).toBe(1);
   });
 
+  test("a re-run commits its dropped take as it was: closed as then, and nothing when it read nothing", () => {
+    const { log, state } = started(waitFlow(tool("heard", "take"), tool("none", "take")));
+    const first = send(log, state, "a");
+    start(log, state, "heard");
+    commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([first])));
+    start(log, state, "none");
+    // A zero-timeout take reads nothing while `heard`'s commit holds the only send.
+    commitPrepared(log, state, prepareTakeCommit(state, "none", takeOf([])));
+    // While the process is down: a send, then the inbox closes.
+    const downtime = send(log, state, "b");
+    close(log, state);
+    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    start(log, state, "heard");
+    expect(() => prepareTakeCommit(state, "heard", takeOf([first], true))).toThrow("must hold closed false");
+    takeAndSucceed(log, state, "heard", takeOf([first]));
+    start(log, state, "none");
+    expect(() => prepareTakeCommit(state, "none", takeOf([downtime]))).toThrow(`must consume [], found [${downtime}]`);
+    takeAndSucceed(log, state, "none", takeOf([]));
+    expect(state.pool.store.get("none")!.toObject()).toEqual({ events: [], closed: false });
+  });
+
   test("a resume retries running nodes only, and checks its closed calls", () => {
     const { log, state } = started(waitFlow(tool("heard", "take"), tool("ask", "ask")));
     start(log, state, "heard");
@@ -922,7 +943,7 @@ test("a resume keeps a dropped take commit's events for its node, ahead of a tak
   expect(wakeableNodes(state.waits)).toEqual([]);
   expect(availableUnread(state.waits, "msgs")).toEqual([]);
   start(log, state, "a");
-  expect(() => wait(log, state, "a", takeEntry("a"))).toThrow("take node 'a' can't wait: it takes back the unread events of its commit a resume dropped");
+  expect(() => wait(log, state, "a", takeEntry("a"))).toThrow("take node 'a' can't wait: it makes again the take commit a resume dropped");
   takeAndSucceed(log, state, "a", takeOf([s]));
   expect(state.pool.store.get("a")!.toObject()).toEqual({ events: ["hi"], closed: false });
   expect([wakeableNodes(state.waits), [...state.waits.waiting.keys()]]).toEqual([[], ["b"]]);

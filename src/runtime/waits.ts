@@ -182,7 +182,7 @@ export class WaitsState {
   readonly _lastWoken = new Map<string, number>();
   /**
    * @internal Each in-flight node's take commit that no success has accepted yet. A resume keeps
-   * it, so the node, run again, takes its events back (`reclaimedTake`).
+   * it, so the node, run again, makes it again (`reclaimedTake`).
    */
   readonly _pendingTakes = new Map<string, { readonly seq: number } & TakeCommit>();
   /** @internal Each unsettled node's latest `model_call` step seq: the calls registered after it are its latest reply's. */
@@ -489,8 +489,8 @@ export function applyWaitsRecord(w: WaitsState, envelope: { readonly seq: number
     // The reply a Stop targeted is stopped; a Stop that stopped no one yet (a mid-turn ask or sleep) still stands.
     for (const [name, stop] of w.stops) if (stop.stopped) w.stops.delete(name);
   } else if (record instanceof RunResumedRecord) {
-    // An orphan take commit still holds its events: its node runs again and takes them back, and no
-    // other take reads them first, as without the crash.
+    // An orphan take commit still holds its events: its node runs again and makes it again, and no
+    // other take or withdraw reaches them first, as without the crash.
     for (const callId of record.closedCalls) close(w.calls.get(callId), "crashed", seq);
   } else if (record instanceof InboxClosedRecord) applyClose(w, record.inbox);
   else if (record instanceof InboxWithdrawnRecord) applyWithdrawn(w, record);
@@ -559,9 +559,11 @@ function applyCommit(w: WaitsState, seq: number, record: PoolCommitRecord): void
     return;
   }
   if (record.take !== null) {
+    // Making again the commit a resume dropped is no new pickup: it read before any Stop made since.
+    const again = reclaimedTake(w, record.nodeId) !== null;
     w._pendingTakes.set(record.nodeId, { seq, ...record.take });
     // An inline take is a pickup from the inbox; a waited take's commit isn't (its wait or answer was).
-    if (!nodeCalls(w, record.nodeId).some((call) => call.tool === "take")) pickup(w, record.take.inbox);
+    if (!again && !nodeCalls(w, record.nodeId).some((call) => call.tool === "take")) pickup(w, record.take.inbox);
     return;
   }
   if (!record.key.startsWith(SEND_PREFIX)) return;
@@ -975,17 +977,14 @@ export function availableUnread(w: WaitsState, inbox: string): readonly number[]
 }
 
 /**
- * Return what in-flight node `nodeId` takes back: the inbox and the still-unread events, in seq
- * order, of its take commit no success accepted, which a resume has dropped by the time the node
- * commits again. As without the crash, the node takes them, and no other take may read them first
- * (`availableUnread`). `null` when it holds no such commit, or none of its events is still unread.
+ * Return the take commit of in-flight node `nodeId` that no success accepted, which a resume has
+ * dropped by the time the node commits again; `null` when it holds none. The node makes it again
+ * as it was, events and `closed`, one that read nothing included, as it would have without the
+ * crash; no other take, withdraw or steer reads its events first.
  */
-export function reclaimedTake(w: WaitsState, nodeId: string): { readonly inbox: TakeInbox; readonly events: readonly number[] } | null {
+export function reclaimedTake(w: WaitsState, nodeId: string): TakeCommit | null {
   const take = w._pendingTakes.get(nodeId);
-  if (take === undefined) return null;
-  const unread = new Set(takeInboxes(take.inbox).flatMap((name) => w.inboxes.get(name)?.unread ?? []));
-  const events = take.events.filter((seq) => unread.has(seq));
-  return events.length > 0 ? { inbox: take.inbox, events } : null;
+  return take === undefined ? null : { inbox: take.inbox, events: take.events, closed: take.closed };
 }
 
 /** Return the take calls reading inbox `name` whose node waits (hasn't woken), in registration order. */
@@ -996,15 +995,14 @@ function waitedTakes(w: WaitsState, name: string): Call[] {
 }
 
 /**
- * Return the send seqs of inbox `name` a `withdraw` takes back, in seq order: its unread sends
- * (an orphan inline take commit's among them) and those assigned to a take whose node hasn't
- * woken. Not included: sends assigned to a woken take, taken by an accepted take, or read by a
- * steer.
+ * Return the send seqs of inbox `name` a `withdraw` takes back, in seq order: its unread sends no
+ * take commit holds (`availableUnread`) and those assigned to a take whose node hasn't woken. Not
+ * included: sends a take commit read, one no success accepted among them (its node takes them
+ * again after a resume), sends assigned to a woken take, or read by a steer.
  */
 export function withdrawableEvents(w: WaitsState, name: string): readonly number[] {
-  const unread = w.inboxes.get(name)?.unread ?? [];
   const held = waitedTakes(w, name).flatMap((call) => call.assigned.filter((_, index) => call.assignedInboxes[index] === name));
-  return [...unread, ...held].sort((a, b) => a - b);
+  return [...availableUnread(w, name), ...held].sort((a, b) => a - b);
 }
 
 /**
@@ -1090,13 +1088,12 @@ export type WaitDecision =
  *
  * A call the node already waited on (a restart after its `node_woken`) is reused: an answered take
  * takes its assigned events, closed when its inbox is closed with nothing left to read; a timed-out
- * take takes nothing; a timed-out sleep is done. A take whose commit a resume dropped takes back
- * that commit's events still unread (`reclaimedTake`), closed when its inbox is closed with nothing
- * else to read. A new take reads the unread events no other pending take commit holds: `take: one`
- * takes the oldest, `take: all` takes them all, closed when that drains a closed inbox; with none,
- * a closed inbox or a zero timeout takes nothing at once, and otherwise the node waits, until
- * `nowMs` plus the timeout when there is one. A new sleep waits until its `until` or `nowMs` plus
- * its seconds, or is done when that time isn't after `nowMs`.
+ * take takes nothing; a timed-out sleep is done. A take whose commit a resume dropped makes it
+ * again as it was (`reclaimedTake`). A new take reads the unread events no other pending take
+ * commit holds: `take: one` takes the oldest, `take: all` takes them all, closed when that drains a
+ * closed inbox; with none, a closed inbox or a zero timeout takes nothing at once, and otherwise
+ * the node waits, until `nowMs` plus the timeout when there is one. A new sleep waits until its
+ * `until` or `nowMs` plus its seconds, or is done when that time isn't after `nowMs`.
  *
  * A take of a list of inboxes reads their events together, in seq order, and its commit names the
  * listed inboxes that are closed with nothing left; with none to read it takes nothing at once only
@@ -1109,17 +1106,16 @@ export function decideWait(w: WaitsState, nodeId: string, callId: string, reques
   const held = w.calls.get(callId);
   if (held !== undefined) return heldDecision(w, held);
   if (request.tool === "take") {
+    const back = reclaimedTake(w, nodeId);
+    if (back !== null) return { kind: "take", commit: { ...back, inbox: request.inbox } };
     const names = takeInboxes(request.inbox);
     const available = availableIn(w, names);
-    // A commit a resume dropped is taken again, as without the crash; nothing else is read.
-    const back = reclaimedTake(w, nodeId);
-    const read = back !== null ? [] : request.mode === "one" ? available.slice(0, 1) : available;
-    const left = available.slice(read.length);
+    const events = request.mode === "one" ? available.slice(0, 1) : available;
+    const left = available.slice(events.length);
     const done = (name: string) => isClosed(w, name) && !left.some(([, of]) => of === name);
-    const events = back?.events ?? read.map(([seq]) => seq);
     const allClosed = names.every((name) => isClosed(w, name));
     if (events.length > 0 || allClosed || (request.timeoutSeconds !== null && request.timeoutSeconds <= 0)) {
-      return take(request.inbox, events, done);
+      return take(request.inbox, events.map(([seq]) => seq), done);
     }
     const deadline = request.timeoutSeconds === null ? null : formatRecordTime(nowMs + request.timeoutSeconds * 1000);
     return { kind: "wait", entry: { callId, tool: "take", inbox: request.inbox, mode: request.mode, deadline } };

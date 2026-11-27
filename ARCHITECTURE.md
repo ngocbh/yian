@@ -42,6 +42,7 @@ flowchart LR
 | `expr/` | The `${...}` expression engine, templates and built-in functions |
 | `typesys/` | Typed values, the type language, the variable pool, the JSON codec, the plain shapes a memory value records (`memory.ts`), and how values and throws cross a worker thread (`crossing.ts`) |
 | `diagnostics.ts` | Failures, diagnostics and the closed list of failure codes (`FAILURE_CODES`) |
+| `confusables.ts` | Unicode's confusables (UTS #39), which `tests/fixtures/confusables.py` generates and child-flow labels are compared by |
 | `events.ts` | The observer events a run emits |
 | `defaults.ts` | Every default and limit, each overridable by a `YIAN_*` variable; an internal wait no one needs to tune, such as the 1 s the CLI waits for the run index's lock, stays in its module |
 | `llm/` | Provider-neutral messages, wire protocols, the HTTP transport and structured output |
@@ -77,12 +78,13 @@ engine records and binds the result.
 node's kind; kind-specific work lives in `nodes/`. `tests/repo/kind_census.test.ts` holds the
 count at zero.
 
-**Imports go one way.** `diagnostics`, `defaults`, `typesys` and `platform` sit at the bottom;
-`events`, `expr`, `llm`, `llm_clients`, `tools`, `skills` and `memory` above them; then `nodes`,
-then `compile`, then `compose` and `runtime`; then `run.ts`; then `child_flows.ts`; then `index.ts`,
-`run_entry.ts` and `cli/`. A module never imports one above it. `tests/repo/layer_direction.test.ts`
-holds this order, failing on a new `src/` entry until it has a layer, and also that only
-`platform.ts` touches Bun or `fetch` and only `defaults.ts` reads the environment.
+**Imports go one way.** `diagnostics`, `defaults`, `typesys`, `platform` and `confusables` sit at
+the bottom; `events`, `expr`, `llm`, `llm_clients`, `tools`, `skills` and `memory` above them; then
+`nodes`, then `compile`, then `compose` and `runtime`; then `run.ts`; then `child_flows.ts`; then
+`index.ts`, `run_entry.ts` and `cli/`. A module never imports one above it.
+`tests/repo/layer_direction.test.ts` holds this order, failing on a new `src/` entry until it has a
+layer, and also that only `platform.ts` touches Bun or `fetch` and only `defaults.ts` reads the
+environment.
 
 **Failure codes are a closed list.** `failure.code` is how a host tells failures apart. A new code
 needs a distinct host reaction, a test, a conformance case and its entry on the docs Reference

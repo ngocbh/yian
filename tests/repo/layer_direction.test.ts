@@ -84,7 +84,7 @@ const only = (file: string) => (path: string) => path === file;
  * entry is a top-level module (without `.ts`) or folder of `src`.
  */
 const LAYERS: readonly (readonly string[])[] = [
-  ["diagnostics", "defaults", "typesys", "platform"],
+  ["diagnostics", "defaults", "typesys", "platform", "confusables"],
   ["events", "expr", "llm", "llm_clients", "tools", "skills", "memory"],
   ["nodes"],
   ["compile"],

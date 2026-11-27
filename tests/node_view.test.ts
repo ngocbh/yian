@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
+import { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
@@ -31,7 +32,7 @@ import { pending } from "../src/tools/context.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { MemoryRef } from "../src/typesys/values.ts";
 import { hostEnv } from "./helpers/mcp_helpers.ts";
-import { callReply, crashAfter, serving, textReply } from "./helpers/run_state_fixtures.ts";
+import { callReply, crashAfter, editRecordedFlow, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-node-view-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -624,4 +625,106 @@ output: \${read.output}
   const view = await nodeView(log, "read", 1, { env });
   expect([view.kind, view.status, view.inputs, view.failure?.code]).toEqual(["code", "failed", null, "binding.type"]);
   expect(view.missing).toContain(result.failure!.message);
+});
+
+test("an agent of a run that used the host's key reads without the key, a call-time one too", async () => {
+  for (const config of ["", "\n    llm_config: {model: \"${pick.output}\"}"]) {
+    const model = new ScriptedModel([textReply("ok")], { provider: "openai", model: "gpt-x" });
+    const { log, result } = await run(
+      `
+id: keyed
+name: keyed
+llm_config: {provider: openai, model: gpt-x}
+input:
+  question: !str
+nodes:
+  pick:
+    kind: code
+    output: !str
+    code: return "gpt-picked"
+  chat:
+    kind: agent${config}
+    input:
+      question: \${input.question}
+    prompt: \${question}
+output: \${chat.output}
+`,
+      { question: "why?" },
+      { models: serving(model, env), llmConfig: { provider: "openai", api_key: "sk-host-key" } },
+    );
+    expect(result.status, result.failure?.message).toBe("succeeded");
+    const view = await nodeView(log, "chat", 1, { env });
+    expect(values(view, "inputs")).toEqual([["question", "str", "why?"]]);
+    expect(view.outputs.map(({ name, value }) => [name, value])[0]).toEqual(["output", "ok"]);
+  }
+});
+
+test("an agent whose memory grant failed to bind still shows its data inputs", async () => {
+  const memoryRoot = mkdtempSync(join(root, "memory-"));
+  const lessons = new FileMemory({ root: memoryRoot, id: "t/twice" });
+  const model = new ScriptedModel([textReply("done")], { provider: "anthropic", model: "claude-test" });
+  const { log, result } = await run(
+    `
+id: twice_granted
+name: twice_granted
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  question: !str
+  a: !FileMemory
+  b: !FileMemory
+nodes:
+  answer:
+    kind: agent
+    input:
+      question: \${input.question}
+    tools: [{a: [read]}, {b: [read]}]
+    prompt: \${question}
+    output: !str
+output: \${answer.output}
+`,
+    { question: "why?", a: lessons, b: lessons },
+    { models: serving(model, env) },
+  );
+  expect(result.failure?.code).toBe("contract.input");
+  const view = await nodeView(log, "answer", 1, { env });
+  expect([view.status, view.missing]).toEqual(["failed", null]);
+  expect(values(view, "inputs")).toEqual([["question", "str", "why?"]]);
+});
+
+test("an optional input the run wasn't given is marked so, unlike one given as null", async () => {
+  const text = `
+id: maybe
+name: maybe
+input:
+  a: !Optional(str)
+nodes:
+  echo:
+    kind: code
+    input:
+      a: \${input.a}
+    output: !Optional(str)
+    code: return inputs.a ?? null
+output: \${echo.output}
+`;
+  const left = (await nodeView((await run(text)).log, "__start__", 1, { env })).inputs;
+  expect(left).toEqual([{ name: "a", type: "Optional(str)", value: null, missing: "not given" }]);
+  const given = (await nodeView((await run(text, { a: null })).log, "__start__", 1, { env })).inputs;
+  expect(given).toEqual([{ name: "a", type: "Optional(str)", value: null, missing: null }]);
+});
+
+test("a recorded flow that compiles to another fingerprint reads from the records alone, saying so", async () => {
+  const { log } = await run(TOTALS, { price: 10, note: "tea" });
+  editRecordedFlow(log, (text) => text.replace("inputs.price + inputs.tax", "inputs.price + inputs.tax + 1"));
+  const view = await nodeView(log, "total", 1, { env });
+  expect(view.missing).toContain("fingerprint");
+  expect([view.kind, view.inputs, view.status]).toEqual([null, null, "succeeded"]);
+  expect(view.outputs).toEqual([{ name: "output", type: null, value: 12n, missing: null }]);
+});
+
+test("a run whose flow was built in code reads with it as flow, and without it says to pass it", async () => {
+  const built = new ComposedFlow((await loadFlow(TOTALS)).compiled);
+  const log = runLog();
+  await runFlow(built, { price: 10, note: "tea" }, { env, log });
+  expect(values(await nodeView(log, "total", 1, { env, flow: built }), "outputs")).toEqual([["output", "int", 12n]]);
+  await expect(nodeView(log, "total", 1, { env })).rejects.toThrow("pass it to nodeView as flow");
 });

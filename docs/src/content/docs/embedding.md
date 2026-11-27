@@ -912,16 +912,19 @@ agent's flow call has its own `__start__` and `__end__`. It gives:
   `restarted`, or `ended` when a cancel, a run's failure or its flow call's end stopped it),
   `startedAt` and `endedAt` (record times), the `failure`, and a route's case as `route`;
 - `inputs`: each declared input as `{name, type, value, missing}`, bound as the node bound it at
-  that start. A memory input is the `MemoryRef` the run recorded; its store isn't opened;
+  that start. A memory input is the `MemoryRef` the run recorded; its store isn't opened. An
+  optional input the run wasn't given has `missing: "not given"`;
 - `outputs`: `output`, and an agent's `new_messages`, as the node's success accepted them, derived
   values rebuilt. A `call`, `map` or `loop` expands instead: its `__end__`, or the last turn's
   driver (`count~2`), writes its output.
 
-Values are yian's, an int as a `bigint`. `env` and `codeRoot` are the run's, as for `foldRunLog`.
-When the recorded flow doesn't load, such as when a CODE file is gone or `env` lacks a `YIAN_*`
-value the run recorded, `missing` says why: `kind` and `inputs` are `null`, each `type` is `null`,
-and an output the log holds only as pointers has a `null` value with that reason. An agent's
-model calls are `agentCalls` and `agentCall`.
+Values are yian's, an int as a `bigint`. `env` and `codeRoot` are the run's, as for `foldRunLog`,
+and a run whose flow was built in code needs it as `flow`. The view never needs the host's key.
+When the recorded flow doesn't load (a CODE file is gone, or `env` lacks a `YIAN_*` value the run
+recorded), or compiles to another fingerprint than the run's (as after a yian upgrade), `missing`
+says why: `kind` and `inputs` are `null`, each `type` is `null`, and an output the log holds only
+as pointers has a `null` value with that reason. A log of another schema throws
+`RunLogSchemaError`. An agent's model calls are `agentCalls` and `agentCall`.
 
 `iterRunRecordsBackwards` takes `iterRunRecords`' `kinds`, `payloads` and `maxLineBytes`. Each
 entry's `offset` is the cursor for the page before it, so a chat can show its newest turns and

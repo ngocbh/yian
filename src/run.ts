@@ -3604,7 +3604,7 @@ export interface NodeValue {
    * `null` too when it couldn't be rebuilt (see `missing`).
    */
   readonly value: Value;
-  /** Why the value couldn't be rebuilt; `null` when it was. */
+  /** Why the value couldn't be rebuilt, or `not given` for an optional input the run left out; else `null`. */
   readonly missing: string | null;
 }
 
@@ -3636,8 +3636,9 @@ export interface NodeView {
   /** The case a route took; else `null`. */
   readonly route: string | null;
   /**
-   * Why `inputs` is `null`: the run's flow doesn't load (so `kind` and the types are `null` too, and
-   * no derived output is rebuilt), or the node's binding fails; `null` when neither.
+   * Why `inputs` is `null`: the run's flow doesn't load or isn't the one that ran (so `kind` and the
+   * types are `null` too, and no derived output is rebuilt), or the node's binding fails; `null`
+   * when neither.
    */
   readonly missing: string | null;
 }
@@ -3658,19 +3659,19 @@ interface AttemptRecords {
  * Read one attempt of a node of the run log at `log`: its kind, status, start and end times, its
  * declared inputs, its outputs, a failure, and a route's case.
  *
- * The status, times, failure and case are read from the records. The inputs and outputs are
- * rebuilt as `foldRunLog` rebuilds values: the log is replayed over the recorded flow, compiled
- * under `env`'s `YIAN_*` values, up to the attempt's end. Each input is bound from the pool when
- * the attempt starts, by the binding the run itself ran, so a memory input reads as the value the
- * run recorded and its store is never opened. Each output is the value the attempt's success
- * accepted, a derived one (a child START's, a turn's END's, a take's, an AGENT's new messages)
- * rebuilt from what it points at.
+ * The status, times, failure and case are read from the records. The inputs and outputs are rebuilt
+ * as `foldRunLog` rebuilds values: the log is replayed over the recorded flow, compiled under
+ * `env`'s `YIAN_*` values, up to the attempt's end. Each input is bound from the pool when the
+ * attempt starts, by the binding the run itself ran, without the node's reserved values, so the
+ * host's key is never needed, and a memory input reads as the value the run recorded, its store
+ * never opened. Each output is the value the attempt's success accepted, a derived one (a child
+ * START's, a turn's END's, a take's, an AGENT's new messages) rebuilt from what it points at.
  *
- * When the flow doesn't load (a CODE file or tool module gone, or `env` lacking the `YIAN_*`
- * values the run recorded), the view says why in `missing`: the records still give the status,
- * times, failure, case and any output the log holds as a value (read without its type, so a file
- * inside a record stays its recorded mapping), and `kind`, the inputs, the types and a derived
- * output are `null`.
+ * When the flow doesn't load (a CODE file or tool module gone, or `env` lacking the `YIAN_*` values
+ * the run recorded), or compiles to another fingerprint than the run recorded (as after a yian
+ * upgrade), the view says why in `missing`: the records still give the status, times, failure, case
+ * and any output the log holds as a value (read without its type, so a file inside a record stays
+ * its recorded mapping), and `kind`, the inputs, the types and a derived output are `null`.
  *
  * An AGENT's model calls are `agentCalls` and `agentCall`.
  *
@@ -3683,8 +3684,10 @@ interface AttemptRecords {
  * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
  *   line throws `RunLogLineTooLongError`.
  * @returns The attempt's view.
- * @throws RangeError when `attempt` isn't a positive integer, or the log has no such start of
- *   `nodeId`; `foldRunLog`'s errors, except the load's, which give the view above.
+ * @throws RangeError when `attempt` isn't a positive integer, the log has no such start of
+ *   `nodeId`, or the run's flow was built in code and `options.flow` is missing; `foldRunLog`'s
+ *   errors (`RunLogSchemaError` for a log of another schema), except the load's and the
+ *   fingerprint's, which give the view above.
  *
  * @example
  * const view = await nodeView(log, "summary", 1);
@@ -3719,6 +3722,16 @@ export async function nodeView(
     failure: records.failure,
     route: records.route,
   };
+  if (start.flow === null && options.flow == null) {
+    throw new YianRangeError(`run log ${log}: this run's flow was built in code; pass it to nodeView as flow`);
+  }
+  const fromRecords = (missing: string): NodeView => ({
+    ...seen,
+    kind: null,
+    inputs: null,
+    outputs: recordedOutputs(entries, records.success, missing),
+    missing,
+  });
   let flow: ComposedFlow;
   try {
     flow = await withEnv(env, () => {
@@ -3731,8 +3744,13 @@ export async function nodeView(
     if (!(error instanceof LoadError || error instanceof DefaultsError || error instanceof DefaultsMismatchError)) {
       throw error;
     }
-    const missing = `the run's flow doesn't load: ${error.message}`;
-    return { ...seen, kind: null, inputs: null, outputs: recordedOutputs(entries, records.success, missing), missing };
+    return fromRecords(`the run's flow doesn't load: ${error.message}`);
+  }
+  // A flow that loads but isn't the one that ran, as after a yian upgrade, can't replay the log.
+  const fingerprint = flowFingerprint(flow.compiled);
+  if (fingerprint !== start.flowFingerprint) {
+    const recorded = reprText(start.flowFingerprint);
+    return fromRecords(`the run's flow compiles to fingerprint ${reprText(fingerprint)}, not the recorded ${recorded}`);
   }
   let kind: string | null = null;
   let bound: Pick<NodeView, "inputs" | "missing"> = { inputs: null, missing: null };
@@ -3764,6 +3782,12 @@ export async function nodeView(
 /**
  * Return what `entries`, a run log's records, hold of start `attempt` of `nodeId`: the start, and
  * the record that ended it with its status, failure and case; `null` when there is no such start.
+ *
+ * The rules mirror the run reducer's (`runtime/state.ts`), read from the records alone so they hold
+ * when the flow doesn't load: a start puts the node in flight, a wait takes it out until its wake,
+ * a success, route, failure or spawner growth settles it, a resume starts what was in flight again,
+ * a failure in a flow call or an interrupt of its agent retires the call's scope (`retireScope`),
+ * and a cancel or a run failure ends the run with it unfinished.
  */
 function attemptRecords(entries: readonly RunLogEntry[], nodeId: string, attempt: number): AttemptRecords | null {
   let starts = 0;
@@ -3821,17 +3845,20 @@ function attemptRecords(entries: readonly RunLogEntry[], nodeId: string, attempt
 function boundInputs(node: Node, state: RunState): Pick<NodeView, "inputs" | "missing"> {
   let bound: Record<string, unknown>;
   try {
-    bound = bindStarted(node, state.flow, state.pool, state.wiringOverrides.get(node.id) ?? null);
+    // A MAP's items come from its reserved `over`. Any other node's reserved values (an AGENT's
+    // call-time config, steer inbox and memory grants) aren't inputs, and its config needs the key.
+    bound = bindStarted(node, state.flow, state.pool, state.wiringOverrides.get(node.id) ?? null, {
+      reserved: node.bindsPerItem,
+    });
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
     return { inputs: null, missing: `its binding fails: ${error.message}` };
   }
-  const read = (name: string, type: Type | null): NodeValue => ({
-    name,
-    type: typeLabel(type),
-    value: Object.hasOwn(bound, name) ? (bound[name] as Value) : null,
-    missing: null,
-  });
+  // Only an optional input the run wasn't given is absent from the bound record: every other is wired.
+  const read = (name: string, type: Type | null): NodeValue =>
+    Object.hasOwn(bound, name)
+      ? { name, type: typeLabel(type), value: bound[name] as Value, missing: null }
+      : { name, type: typeLabel(type), value: null, missing: "not given" };
   if (node.bindsPerItem) {
     const item = itemDeclaredType(state.flow, node);
     const list = item === null ? null : new Type({ kind: listKindForElement(item), element: item });
